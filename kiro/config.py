@@ -179,10 +179,10 @@ AWS_SSO_OIDC_URL_TEMPLATE: str = "https://oidc.{region}.amazonaws.com/token"
 # Universal endpoint for all regions (us-east-1, eu-central-1, etc.)
 # See: https://docs.aws.amazon.com/amazonq/latest/qdeveloper-ug/security-data-perimeter.html
 # Fixed in issue #58 - codewhisperer.{region}.amazonaws.com doesn't exist for non-us-east-1 regions
-KIRO_API_HOST_TEMPLATE: str = "https://q.{region}.amazonaws.com"
+KIRO_API_HOST_TEMPLATE: str = "https://runtime.{region}.kiro.dev"
 
 # Host for Q API (ListAvailableModels)
-KIRO_Q_HOST_TEMPLATE: str = "https://q.{region}.amazonaws.com"
+KIRO_Q_HOST_TEMPLATE: str = "https://runtime.{region}.kiro.dev"
 
 # ==================================================================================================
 # Token Settings
@@ -217,12 +217,8 @@ BASE_RETRY_DELAY: float = 1.0
 # Why "hidden"? These models work but are not advertised by Kiro's /ListAvailableModels.
 # We expose them to our users because they're useful.
 HIDDEN_MODELS: Dict[str, str] = {
-    # Claude 3.7 Sonnet - legacy flagship model, still works!
-    # Hidden in Kiro API but functional. Great for users who prefer it.
-    "claude-3.7-sonnet": "CLAUDE_3_7_SONNET_20250219_V1_0",
-    
-    # Add other hidden/experimental models here as discovered.
-    # Example: "claude-secret-model": "INTERNAL_SECRET_MODEL_ID",
+    # Claude 3.7 Sonnet - legacy model, maps to "auto" on new runtime endpoint
+    "claude-3.7-sonnet": "auto",
 }
 
 # ==================================================================================================
