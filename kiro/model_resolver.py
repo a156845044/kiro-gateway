@@ -42,16 +42,10 @@ if TYPE_CHECKING:
 
 
 # Valid model IDs accepted by runtime.{region}.kiro.dev
-VALID_RUNTIME_MODEL_IDS: set = {
-    "auto",
-    "claude-sonnet-4",
-    "claude-sonnet-4.5",
-    "claude-sonnet-4.6",
-    "claude-opus-4.5",
-    "claude-opus-4.6",
-    "claude-opus-4.7",
-    "claude-haiku-4.5",
-}
+# Generated from FALLBACK_MODELS to maintain single source of truth
+from kiro.config import FALLBACK_MODELS
+
+VALID_RUNTIME_MODEL_IDS: set = {model["modelId"] for model in FALLBACK_MODELS}
 
 
 def to_runtime_model_id(normalized: str) -> str:

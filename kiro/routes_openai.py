@@ -37,6 +37,7 @@ from loguru import logger
 from kiro.config import (
     PROXY_API_KEY,
     APP_VERSION,
+    PROFILE_ARN,
 )
 from kiro.models_openai import (
     OpenAIModel,
@@ -322,9 +323,8 @@ async def chat_completions(request: Request, request_data: ChatCompletionRequest
             conversation_id = generate_conversation_id()
             
             # Build payload for Kiro
-            profile_arn_for_payload = ""
-            if auth_manager.auth_type == AuthType.KIRO_DESKTOP and auth_manager.profile_arn:
-                profile_arn_for_payload = auth_manager.profile_arn
+            # profileArn is required by runtime.kiro.dev for all auth types
+            profile_arn_for_payload = auth_manager.profile_arn or PROFILE_ARN or ""
             
             try:
                 kiro_payload = build_kiro_payload(
@@ -572,7 +572,7 @@ async def chat_completions(request: Request, request_data: ChatCompletionRequest
     
     # Build payload for Kiro
     # profileArn is required by runtime.kiro.dev for all auth types
-    profile_arn_for_payload = auth_manager.profile_arn or ""
+    profile_arn_for_payload = auth_manager.profile_arn or PROFILE_ARN or ""
     
     try:
         kiro_payload = build_kiro_payload(
