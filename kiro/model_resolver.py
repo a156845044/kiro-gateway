@@ -50,14 +50,19 @@ VALID_RUNTIME_MODEL_IDS: set = {model["modelId"] for model in FALLBACK_MODELS}
 
 def to_runtime_model_id(normalized: str) -> str:
     """
-    Map a normalized model name to a valid runtime.kiro.dev model ID.
-
-    Returns the model as-is if it's in the valid set, otherwise "auto".
+    Pass-through function for runtime.kiro.dev model ID.
+    
+    Previously performed fallback to "auto" for unknown models, but this violated
+    the "gateway, not gatekeeper" principle. Now returns model as-is and lets
+    Kiro API decide if the model exists.
+    
+    Args:
+        normalized: Normalized model name
+    
+    Returns:
+        Model name as-is (no fallback)
     """
-    if normalized in VALID_RUNTIME_MODEL_IDS:
-        return normalized
-    logger.debug(f"Model '{normalized}' not valid for runtime endpoint, defaulting to 'auto'")
-    return "auto"
+    return normalized
 
 
 @dataclass(frozen=True)
