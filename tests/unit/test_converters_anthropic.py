@@ -1884,3 +1884,146 @@ class TestAnthropicToKiroIntegration:
         print(f"Checking for <max_thinking_length>6000</max_thinking_length>...")
         assert "<max_thinking_length>6000</max_thinking_length>" in content
         assert "<thinking_mode>enabled</thinking_mode>" in content
+
+
+# ==================================================================================================
+# Tests for system-role messages in the messages array (client compatibility)
+# ==================================================================================================
+
+
+class TestSystemRoleMessagesExtraction:
+    """
+    Tests for extracting role='system' messages from the messages array.
+
+    Some clients (e.g. Claude Code) include system instructions as messages
+    with role='system' inside the messages array instead of the top-level
+    `system` field.  The converter must merge them into the system prompt and
+    remove them from the messages list before building the Kiro payload.
+    """
+
+    def _make_request(self, messages, system=None):
+        """Helper to build a minimal AnthropicMessagesRequest."""
+        return AnthropicMessagesRequest(
+            model="claude-sonnet-4.5",
+            messages=messages,
+            max_tokens=1024,
+            system=system,
+        )
+
+    def _call(self, request):
+        with patch("kiro.converters_anthropic.get_model_id_for_kiro", return_value="claude-sonnet-4.5"):
+            with patch("kiro.converters_core.FAKE_REASONING_ENABLED", False):
+                return anthropic_to_kiro(request, "conv-1", "arn:aws:test")
+
+    def test_system_role_message_merged_into_system_prompt(self):
+        """
+        What it does: Verifies that a system-role message in the messages array is merged
+        into the system prompt and not forwarded to the Kiro API as a conversation message.
+        Purpose: Prevent 422 from Kiro when role='system' appears in messages.
+        """
+        print("Setup: Request with role='system' as first message...")
+        request = self._make_request(
+            messages=[
+                AnthropicMessage(role="system", content="You are a pirate."),
+                AnthropicMessage(role="user", content="Ahoy!"),
+            ]
+        )
+
+        print("Action: Converting to Kiro payload...")
+        payload = self._call(request)
+
+        # System text must appear somewhere in the payload content
+        content = payload["conversationState"]["currentMessage"]["userInputMessage"]["content"]
+        print(f"Payload content: {content}")
+        assert "You are a pirate." in content
+
+        # History should contain only the single user message (no system message)
+        history = payload["conversationState"].get("history", [])
+        print(f"History length: {len(history)}")
+        assert len(history) == 0, "system-role message must not appear in history"
+
+    def test_system_role_merged_with_existing_system_field(self):
+        """
+        What it does: Verifies that system-role messages are appended to the existing
+        top-level system prompt, not replacing it.
+        Purpose: Ensure both system sources are combined correctly.
+        """
+        print("Setup: Request with both system field and system-role message...")
+        request = self._make_request(
+            messages=[
+                AnthropicMessage(role="system", content="Extra instruction."),
+                AnthropicMessage(role="user", content="Hello!"),
+            ],
+            system="Base system prompt.",
+        )
+
+        print("Action: Converting to Kiro payload...")
+        payload = self._call(request)
+
+        content = payload["conversationState"]["currentMessage"]["userInputMessage"]["content"]
+        print(f"Payload content snippet: {content[:200]}")
+        assert "Base system prompt." in content
+        assert "Extra instruction." in content
+
+    def test_multiple_system_role_messages_all_merged(self):
+        """
+        What it does: Verifies that multiple system-role messages are all merged.
+        Purpose: Ensure no system messages are silently dropped.
+        """
+        print("Setup: Request with two system-role messages...")
+        request = self._make_request(
+            messages=[
+                AnthropicMessage(role="system", content="Rule 1."),
+                AnthropicMessage(role="system", content="Rule 2."),
+                AnthropicMessage(role="user", content="Question"),
+            ]
+        )
+
+        print("Action: Converting to Kiro payload...")
+        payload = self._call(request)
+
+        content = payload["conversationState"]["currentMessage"]["userInputMessage"]["content"]
+        assert "Rule 1." in content
+        assert "Rule 2." in content
+
+    def test_no_system_role_messages_unchanged(self):
+        """
+        What it does: Verifies that a normal request without system-role messages is
+        converted without modification.
+        Purpose: Ensure the extraction logic does not break the happy path.
+        """
+        print("Setup: Normal request with only user/assistant messages...")
+        request = self._make_request(
+            messages=[
+                AnthropicMessage(role="user", content="Hi!"),
+                AnthropicMessage(role="assistant", content="Hello!"),
+                AnthropicMessage(role="user", content="How are you?"),
+            ]
+        )
+
+        print("Action: Converting to Kiro payload...")
+        payload = self._call(request)
+
+        history = payload["conversationState"].get("history", [])
+        print(f"History length: {len(history)}")
+        assert len(history) == 2, "user+assistant pair should be in history"
+
+    def test_only_system_role_raises_no_messages_error(self):
+        """
+        What it does: Verifies that a request with only system-role messages raises an error.
+        Purpose: After extracting system messages, if no regular messages remain the
+        build_kiro_payload should raise because there is nothing to send.
+        """
+        import pytest
+
+        print("Setup: Request with only a system-role message, no user message...")
+        request = self._make_request(
+            messages=[
+                AnthropicMessage(role="system", content="System only."),
+            ]
+        )
+
+        print("Action: Expecting ValueError because no user messages remain...")
+        with pytest.raises((ValueError, Exception)):
+            self._call(request)
+

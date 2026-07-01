@@ -389,6 +389,79 @@ class TestContentBlockUnion:
 
 
 # ==================================================================================================
+# Tests for AnthropicMessage system role (client compatibility fix)
+# ==================================================================================================
+
+
+class TestAnthropicMessageSystemRole:
+    """
+    Tests for AnthropicMessage accepting role='system'.
+
+    Some clients (e.g. Claude Code) place system instructions directly inside
+    the messages array as role='system' instead of using the top-level `system`
+    field.  The gateway must accept them at the model layer and the converter
+    extracts them into the system prompt automatically.
+    """
+
+    def test_accepts_system_role_string_content(self):
+        """
+        What it does: Verifies AnthropicMessage accepts role='system' with string content.
+        Purpose: Ensure Pydantic validation does not reject system-role messages.
+        """
+        print("Setup: Creating AnthropicMessage with role='system'...")
+        msg = AnthropicMessage(role="system", content="You are a helpful assistant.")
+
+        print(f"Result: {msg}")
+        assert msg.role == "system"
+        assert msg.content == "You are a helpful assistant."
+
+    def test_accepts_system_role_block_content(self):
+        """
+        What it does: Verifies AnthropicMessage accepts role='system' with content blocks.
+        Purpose: Ensure system role works with list-of-blocks content format.
+        """
+        print("Setup: Creating AnthropicMessage with role='system' and text block...")
+        msg = AnthropicMessage(
+            role="system",
+            content=[{"type": "text", "text": "Be concise."}],
+        )
+
+        print(f"Result: {msg}")
+        assert msg.role == "system"
+
+    def test_rejects_invalid_role(self):
+        """
+        What it does: Verifies AnthropicMessage rejects an unknown role like 'developer'.
+        Purpose: Ensure only user/assistant/system are accepted.
+        """
+        from pydantic import ValidationError
+
+        print("Setup: Attempting to create AnthropicMessage with role='developer'...")
+        with pytest.raises(ValidationError):
+            AnthropicMessage(role="developer", content="hello")  # type: ignore[arg-type]
+
+    def test_request_accepts_system_role_in_messages(self):
+        """
+        What it does: Verifies AnthropicMessagesRequest accepts a system-role message.
+        Purpose: Ensure the full request model allows role='system' inside messages.
+        """
+        print("Setup: Creating request with system-role message in messages array...")
+        request = AnthropicMessagesRequest(
+            model="claude-sonnet-4.5",
+            messages=[
+                AnthropicMessage(role="system", content="Be helpful."),
+                AnthropicMessage(role="user", content="Hello!"),
+            ],
+            max_tokens=1024,
+        )
+
+        print(f"Messages count: {len(request.messages)}")
+        assert len(request.messages) == 2
+        assert request.messages[0].role == "system"
+        assert request.messages[1].role == "user"
+
+
+# ==================================================================================================
 # Tests for AnthropicMessage with Image Content (Issue #30 fix verification)
 # ==================================================================================================
 

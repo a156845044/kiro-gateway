@@ -77,9 +77,16 @@ class AuthType(Enum):
         - Uses https://oidc.{region}.amazonaws.com/token
         - Form body: grant_type=refresh_token&client_id=...&client_secret=...&refresh_token=...
         - Requires clientId and clientSecret from credentials file
+    
+    EXTERNAL_IDP: External Identity Provider (e.g. Microsoft Azure AD / corporate SSO)
+        - Uses tokenEndpoint from credentials file (e.g. Microsoft login.microsoftonline.com)
+        - Form body: grant_type=refresh_token&client_id=...&refresh_token=...&scope=...
+        - Does NOT require clientSecret (public client / PKCE flow)
+        - Detected by presence of "authMethod": "external_idp" or "tokenEndpoint" in credentials
     """
     KIRO_DESKTOP = "kiro_desktop"
     AWS_SSO_OIDC = "aws_sso_oidc"
+    EXTERNAL_IDP = "external_idp"
 
 
 class KiroAuthManager:
@@ -153,6 +160,10 @@ class KiroAuthManager:
         self._client_secret: Optional[str] = client_secret
         self._scopes: Optional[list] = None  # OAuth scopes for AWS SSO OIDC
         self._sso_region: Optional[str] = None  # SSO region for OIDC token refresh (may differ from API region)
+        
+        # External IdP specific fields (e.g. Microsoft Azure AD)
+        self._token_endpoint: Optional[str] = None  # Full token refresh URL from credentials
+        self._auth_method: Optional[str] = None     # authMethod field from credentials file
         
         # Enterprise Kiro IDE specific fields
         self._client_id_hash: Optional[str] = None  # clientIdHash from Enterprise Kiro IDE
@@ -235,10 +246,15 @@ class KiroAuthManager:
         """
         Detects authentication type based on available credentials.
         
-        AWS SSO OIDC credentials contain clientId and clientSecret.
-        Kiro Desktop credentials do not contain these fields.
+        Priority:
+        1. EXTERNAL_IDP: authMethod == "external_idp" or tokenEndpoint is set
+        2. AWS_SSO_OIDC: clientId AND clientSecret are both present
+        3. KIRO_DESKTOP: default fallback
         """
-        if self._client_id and self._client_secret:
+        if self._auth_method == "external_idp" or self._token_endpoint:
+            self._auth_type = AuthType.EXTERNAL_IDP
+            logger.info(f"Detected auth type: External IdP (endpoint: {self._token_endpoint})")
+        elif self._client_id and self._client_secret:
             self._auth_type = AuthType.AWS_SSO_OIDC
             logger.info("Detected auth type: AWS SSO OIDC (kiro-cli)")
         else:
@@ -437,6 +453,16 @@ class KiroAuthManager:
                 self._client_id = data['clientId']
             if 'clientSecret' in data:
                 self._client_secret = data['clientSecret']
+            
+            # Load External IdP fields (e.g. Microsoft Azure AD)
+            if 'authMethod' in data:
+                self._auth_method = data['authMethod']
+            if 'tokenEndpoint' in data:
+                self._token_endpoint = data['tokenEndpoint']
+            if 'scopes' in data:
+                # scopes may be a space-separated string or a list
+                raw = data['scopes']
+                self._scopes = raw.split() if isinstance(raw, str) else raw
             
             # Parse expiresAt
             if 'expiresAt' in data:
@@ -678,6 +704,8 @@ class KiroAuthManager:
         """
         if self._auth_type == AuthType.AWS_SSO_OIDC:
             await self._refresh_token_aws_sso_oidc()
+        elif self._auth_type == AuthType.EXTERNAL_IDP:
+            await self._refresh_token_external_idp()
         else:
             await self._refresh_token_kiro_desktop()
     
@@ -740,6 +768,74 @@ class KiroAuthManager:
         else:
             self._save_credentials_to_file()
     
+    async def _refresh_token_external_idp(self) -> None:
+        """
+        Refreshes token using an external Identity Provider endpoint (e.g. Microsoft Azure AD).
+
+        Used when credentials file contains authMethod=external_idp or a tokenEndpoint
+        pointing to a third-party OAuth server (not Kiro Desktop Auth and not AWS SSO OIDC).
+
+        This is a public-client (PKCE) flow — no clientSecret is required.
+
+        Endpoint: value of tokenEndpoint from credentials file
+        Method: POST
+        Content-Type: application/x-www-form-urlencoded
+        Body: grant_type=refresh_token&client_id=...&refresh_token=...&scope=...
+
+        Raises:
+            ValueError: If required credentials are not set or response is invalid
+            httpx.HTTPError: On HTTP request error
+        """
+        if not self._refresh_token:
+            raise ValueError("Refresh token is not set")
+        if not self._token_endpoint:
+            raise ValueError("tokenEndpoint is not set (required for External IdP auth)")
+        if not self._client_id:
+            raise ValueError("clientId is not set (required for External IdP auth)")
+
+        logger.info(f"Refreshing token via External IdP: {self._token_endpoint}")
+
+        data: dict[str, str] = {
+            "grant_type": "refresh_token",
+            "client_id": self._client_id,
+            "refresh_token": self._refresh_token,
+        }
+        if self._scopes:
+            data["scope"] = " ".join(self._scopes) if isinstance(self._scopes, list) else self._scopes
+
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
+
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.post(self._token_endpoint, data=data, headers=headers)
+
+            if response.status_code != 200:
+                error_body = response.text
+                logger.error(
+                    f"External IdP token refresh failed: status={response.status_code}, "
+                    f"body={error_body}"
+                )
+                response.raise_for_status()
+
+            result = response.json()
+
+        # Microsoft / standard OAuth2 response uses snake_case
+        new_access_token = result.get("access_token")
+        new_refresh_token = result.get("refresh_token")
+        expires_in = result.get("expires_in", 3600)
+
+        if not new_access_token:
+            raise ValueError(f"External IdP response does not contain access_token: {result}")
+
+        self._access_token = new_access_token
+        if new_refresh_token:
+            self._refresh_token = new_refresh_token
+
+        self._expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in - 60)
+
+        logger.info(f"Token refreshed via External IdP, expires: {self._expires_at.isoformat()}")
+
+        self._save_credentials_to_file()
+
     async def _refresh_token_aws_sso_oidc(self) -> None:
         """
         Refreshes token using AWS SSO OIDC endpoint.

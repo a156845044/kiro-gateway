@@ -183,11 +183,18 @@ class AnthropicMessage(BaseModel):
     Message in Anthropic format.
 
     Attributes:
-        role: Message role (user or assistant)
+        role: Message role (user, assistant, or system)
         content: Message content (string or list of content blocks)
+
+    Note:
+        The Anthropic API spec places system prompts in the separate `system`
+        field of the request, not inside `messages`. However, some clients
+        (e.g. Claude Code) may send messages with role="system" inside the
+        messages array. The gateway accepts them here and the converter
+        extracts them into the top-level system prompt automatically.
     """
 
-    role: Literal["user", "assistant"]
+    role: Literal["user", "assistant", "system"]
     content: Union[str, List[ContentBlock]]
 
     model_config = {"extra": "allow"}

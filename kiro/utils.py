@@ -66,17 +66,20 @@ def get_kiro_headers(auth_manager: "KiroAuthManager", token: str) -> dict:
     - Authorization with Bearer token
     - User-Agent with fingerprint
     - AWS CodeWhisperer specific headers
+    - TokenType header for External IdP (Microsoft SSO / corporate SSO)
     
     Args:
-        auth_manager: Authentication manager for obtaining fingerprint
+        auth_manager: Authentication manager for obtaining fingerprint and auth type
         token: Access token for authorization
     
     Returns:
         Dictionary with headers for HTTP request
     """
+    from kiro.auth import AuthType
+
     fingerprint = auth_manager.fingerprint
     
-    return {
+    headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/x-amz-json-1.0",
         "x-amz-target": "AmazonCodeWhispererStreamingService.GenerateAssistantResponse",
@@ -87,6 +90,14 @@ def get_kiro_headers(auth_manager: "KiroAuthManager", token: str) -> dict:
         "amz-sdk-invocation-id": str(uuid.uuid4()),
         "amz-sdk-request": "attempt=1; max=3",
     }
+
+    # External IdP (e.g. Microsoft Azure AD / corporate SSO) requires a TokenType header
+    # so the Kiro runtime knows to validate the token as a third-party OAuth2 token
+    # rather than a Kiro Desktop token.
+    if auth_manager.auth_type == AuthType.EXTERNAL_IDP:
+        headers["TokenType"] = "EXTERNAL_IDP"
+
+    return headers
 
 
 def generate_completion_id() -> str:
