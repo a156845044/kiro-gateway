@@ -445,26 +445,97 @@ class TestParseKiroStream:
         What it does: Raises FirstTokenTimeoutError on timeout.
         Goal: Verify timeout handling for first token.
         """
-        print("Setup: Mock response that times out...")
+        print("Setup: Mock response that never yields (simulates hung server)...")
         
-        async def mock_aiter_bytes():
-            yield b'chunk'
+        async def mock_aiter_bytes_never():
+            await asyncio.sleep(999)  # Never yields within any reasonable test timeout
+            yield b''  # Unreachable
         
-        mock_response.aiter_bytes = mock_aiter_bytes
+        mock_response.aiter_bytes = mock_aiter_bytes_never
         
-        async def mock_wait_for_timeout(*args, **kwargs):
-            raise asyncio.TimeoutError()
+        print("Action: Parsing stream with very short timeout (0.05s)...")
         
-        print("Action: Parsing stream with timeout...")
-        
-        with patch('kiro.streaming_core.asyncio.wait_for', side_effect=mock_wait_for_timeout):
-            with pytest.raises(FirstTokenTimeoutError) as exc_info:
-                async for event in parse_kiro_stream(mock_response, first_token_timeout=30):
-                    pass
+        with pytest.raises(FirstTokenTimeoutError) as exc_info:
+            async for event in parse_kiro_stream(mock_response, first_token_timeout=0.05):
+                pass
         
         print(f"Caught exception: {exc_info.value}")
-        assert "30" in str(exc_info.value)
+        assert "0.05" in str(exc_info.value)
         print("✓ FirstTokenTimeoutError raised on timeout")
+    
+    @pytest.mark.asyncio
+    async def test_yields_heartbeat_while_waiting_for_first_token(self, mock_response, mock_parser):
+        """
+        What it does: Yields heartbeat events while waiting for the first token.
+        Goal: Verify that the heartbeat keepalive mechanism sends events to the client
+              before Kiro returns the first byte, preventing client-side idle timeouts.
+        """
+        print("Setup: Mock response that delays 0.15s before yielding...")
+        
+        async def mock_aiter_bytes_delayed():
+            await asyncio.sleep(0.15)
+            yield b'chunk'
+        
+        mock_response.aiter_bytes = mock_aiter_bytes_delayed
+        mock_parser.feed.return_value = []
+        mock_parser.get_tool_calls.return_value = []
+        
+        print("Action: Parsing with heartbeat_interval=0.05s, timeout=0.5s...")
+        heartbeat_events = []
+        
+        with patch('kiro.streaming_core.AwsEventStreamParser', return_value=mock_parser):
+            with patch('kiro.streaming_core.HEARTBEAT_INTERVAL', 0.05):
+                with patch('kiro.streaming_core.FAKE_REASONING_ENABLED', False):
+                    async for event in parse_kiro_stream(mock_response, first_token_timeout=0.5):
+                        if event.type == "heartbeat":
+                            heartbeat_events.append(event)
+        
+        print(f"Received {len(heartbeat_events)} heartbeat event(s)")
+        assert len(heartbeat_events) >= 1, "Expected at least 1 heartbeat while waiting for first token"
+        print("✓ Heartbeat events yielded correctly while waiting for first token")
+    
+    @pytest.mark.asyncio
+    async def test_yields_heartbeat_during_model_thinking_after_initial_response(
+        self, mock_response, mock_parser
+    ):
+        """
+        What it does: Yields heartbeats during the silent period AFTER Kiro's
+                      initial-response frame and BEFORE the first content event.
+        Goal: Kiro always sends an initial-response frame immediately (with only a
+              conversationId), then is silent while the model thinks. Clients like
+              Claude Code time out during this silence. This test verifies that
+              heartbeats are sent throughout the whole silent period, not just before
+              the first byte.
+        """
+        print("Setup: initial-response arrives fast (0.01s), then 0.15s model thinking...")
+        
+        async def mock_aiter_bytes_initial_then_content():
+            await asyncio.sleep(0.01)   # initial-response arrives almost immediately
+            yield b'{"conversationId":""}'  # metadata bytes — parser yields nothing
+            await asyncio.sleep(0.15)   # model thinks silently
+            yield b'content_bytes'      # actual content arrives
+        
+        mock_response.aiter_bytes = mock_aiter_bytes_initial_then_content
+        mock_parser.feed.return_value = []  # Parser yields nothing (simulates metadata)
+        mock_parser.get_tool_calls.return_value = []
+        
+        print("Action: Parsing with heartbeat_interval=0.05s, timeout=0.5s...")
+        heartbeat_events = []
+        
+        with patch('kiro.streaming_core.AwsEventStreamParser', return_value=mock_parser):
+            with patch('kiro.streaming_core.HEARTBEAT_INTERVAL', 0.05):
+                with patch('kiro.streaming_core.FAKE_REASONING_ENABLED', False):
+                    async for event in parse_kiro_stream(mock_response, first_token_timeout=0.5):
+                        if event.type == "heartbeat":
+                            heartbeat_events.append(event)
+        
+        print(f"Received {len(heartbeat_events)} heartbeat event(s)")
+        assert len(heartbeat_events) >= 1, (
+            "Expected heartbeats during model thinking phase after initial-response. "
+            "The gateway must keep the client alive even when Kiro's initial-response "
+            "satisfies the first-byte check but content is still many seconds away."
+        )
+        print("✓ Heartbeats sent correctly during model thinking phase after initial-response")
     
     @pytest.mark.asyncio
     async def test_handles_empty_response(self, mock_response):
@@ -1166,22 +1237,19 @@ class TestStreamingCoreErrorHandling:
         What it does: Propagates FirstTokenTimeoutError.
         Goal: Verify timeout error is not caught internally.
         """
-        print("Setup: Mock response that times out...")
+        print("Setup: Mock response that never yields (simulates hung server)...")
         
-        async def mock_aiter_bytes():
-            yield b'chunk'
+        async def mock_aiter_bytes_never():
+            await asyncio.sleep(999)  # Never yields within any reasonable test timeout
+            yield b''  # Unreachable
         
-        mock_response.aiter_bytes = mock_aiter_bytes
+        mock_response.aiter_bytes = mock_aiter_bytes_never
         
-        async def mock_wait_for_timeout(*args, **kwargs):
-            raise asyncio.TimeoutError()
+        print("Action: Parsing stream with very short timeout (0.05s)...")
         
-        print("Action: Parsing stream with timeout...")
-        
-        with patch('kiro.streaming_core.asyncio.wait_for', side_effect=mock_wait_for_timeout):
-            with pytest.raises(FirstTokenTimeoutError):
-                async for event in parse_kiro_stream(mock_response, first_token_timeout=30):
-                    pass
+        with pytest.raises(FirstTokenTimeoutError):
+            async for event in parse_kiro_stream(mock_response, first_token_timeout=0.05):
+                pass
         
         print("✓ FirstTokenTimeoutError propagated correctly")
     

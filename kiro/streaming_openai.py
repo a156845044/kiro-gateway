@@ -130,6 +130,11 @@ async def stream_kiro_to_openai_internal(
         # Use streaming_core.parse_kiro_stream for unified event parsing
         # This handles AWS SSE parsing, first token timeout, and thinking parser
         async for event in parse_kiro_stream(response, first_token_timeout):
+            if event.type == "heartbeat":
+                # SSE comment keeps the connection alive without affecting client logic
+                yield ": keep-alive\n\n"
+                continue
+            
             if event.type == "content" and event.content:
                 # Accumulate content for bracket tool call detection
                 full_content += event.content

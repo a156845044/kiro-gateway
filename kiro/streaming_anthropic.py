@@ -221,6 +221,11 @@ async def stream_kiro_to_anthropic(
         })
         
         async for event in parse_kiro_stream(response, first_token_timeout):
+            if event.type == "heartbeat":
+                # Anthropic spec defines a proper "ping" event for keepalive
+                yield format_sse_event("ping", {"type": "ping"})
+                continue
+            
             if event.type == "content":
                 content = event.content or ""
                 full_content += content

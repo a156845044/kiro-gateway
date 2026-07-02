@@ -41,6 +41,7 @@ from kiro.parsers import AwsEventStreamParser, parse_bracket_tool_calls, dedupli
 from kiro.config import (
     FIRST_TOKEN_TIMEOUT,
     FIRST_TOKEN_MAX_RETRIES,
+    HEARTBEAT_INTERVAL,
     FAKE_REASONING_ENABLED,
     FAKE_REASONING_HANDLING,
 )
@@ -115,6 +116,41 @@ class FirstTokenTimeoutError(Exception):
 # Kiro Stream Parsing
 # ==================================================================================================
 
+async def _iter_bytes_with_heartbeat(
+    byte_iterator,
+    heartbeat_interval: float,
+) -> AsyncGenerator[Optional[bytes], None]:
+    """
+    Wraps an async bytes iterator and injects heartbeat signals (None) when no data
+    arrives within heartbeat_interval seconds.
+
+    This lets callers detect idle periods and send keepalive events to downstream
+    clients without blocking or cancelling the underlying I/O task.
+
+    Yields:
+        bytes: An actual chunk of data from the iterator.
+        None:  A heartbeat signal - no data received for heartbeat_interval seconds.
+    """
+    while True:
+        task = asyncio.ensure_future(byte_iterator.__anext__())
+        try:
+            while True:
+                done, _ = await asyncio.wait({task}, timeout=heartbeat_interval)
+                if done:
+                    try:
+                        result = task.result()
+                    except StopAsyncIteration:
+                        return  # Stream ended normally
+                    yield result
+                    break  # Create task for next chunk
+                else:
+                    yield None  # Heartbeat: no data yet
+        except BaseException:
+            if not task.done():
+                task.cancel()
+            raise
+
+
 async def parse_kiro_stream(
     response: httpx.Response,
     first_token_timeout: float = FIRST_TOKEN_TIMEOUT,
@@ -122,71 +158,97 @@ async def parse_kiro_stream(
 ) -> AsyncGenerator[KiroEvent, None]:
     """
     Parses Kiro SSE stream and yields unified events.
-    
-    This is the core parsing function that converts Kiro's AWS SSE format
-    into unified KiroEvent objects that can be formatted for any API.
-    
+
+    This is the core parsing function that converts Kiro's AWS binary Event Stream
+    format into unified KiroEvent objects for any API format.
+
+    Heartbeat strategy:
+        Kiro always sends an ``initial-response`` frame first (containing only a
+        ``conversationId``), which arrives almost immediately but carries no content.
+        The model then "thinks" silently for several seconds before the first
+        ``assistantResponseEvent`` arrives.  Without heartbeats the downstream client
+        (Claude Code, Cursor, Codex, …) would see an idle SSE connection and
+        time-out.
+
+        We use ``_iter_bytes_with_heartbeat`` for **every** chunk read — not just
+        the first — so keepalive events are forwarded to the client throughout the
+        entire silent period, regardless of whether that silence comes before or
+        after the ``initial-response`` frame.
+
     Args:
         response: HTTP response with data stream
-        first_token_timeout: First token wait timeout (seconds)
-        enable_thinking_parser: Whether to enable thinking block parsing
-    
+        first_token_timeout: Maximum seconds to wait for the very first byte from
+            Kiro before raising FirstTokenTimeoutError and triggering a retry.
+        enable_thinking_parser: Whether to enable thinking block parsing.
+
     Yields:
-        KiroEvent objects representing stream events
-    
+        KiroEvent objects representing stream events.
+        KiroEvent(type="heartbeat") is yielded during idle periods.
+
     Raises:
-        FirstTokenTimeoutError: If first token not received within timeout
+        FirstTokenTimeoutError: If no byte is received within first_token_timeout.
     """
     parser = AwsEventStreamParser()
-    first_token_received = False
-    
+
     # Initialize thinking parser if fake reasoning is enabled
     thinking_parser: Optional[ThinkingParser] = None
     if FAKE_REASONING_ENABLED and enable_thinking_parser:
         thinking_parser = ThinkingParser(handling_mode=FAKE_REASONING_HANDLING)
         logger.debug(f"Thinking parser initialized with mode: {FAKE_REASONING_HANDLING}")
-    
+
+    heartbeat_interval = HEARTBEAT_INTERVAL if HEARTBEAT_INTERVAL > 0 else first_token_timeout
+    logger.debug(
+        f"Starting Kiro stream (first_token_timeout={first_token_timeout}s, "
+        f"heartbeat_interval={heartbeat_interval}s)..."
+    )
+
+    byte_iterator = response.aiter_bytes()
+    first_byte_received = False
+    # Accumulates idle time before the first byte to enforce first_token_timeout.
+    # After the first byte arrives this counter is no longer checked for timeout,
+    # but continues to increment so debug logs show idle duration between chunks.
+    time_without_data = 0.0
+
     try:
-        # Create iterator for reading bytes
-        byte_iterator = response.aiter_bytes()
-        
-        # Wait for first chunk with timeout
-        try:
-            logger.debug(f"Waiting for first token (timeout={first_token_timeout}s)...")
-            first_byte_chunk = await asyncio.wait_for(
-                byte_iterator.__anext__(),
-                timeout=first_token_timeout
-            )
-            logger.debug("First token received")
-        except asyncio.TimeoutError:
-            logger.warning(f"[FirstTokenTimeout] Model did not respond within {first_token_timeout}s")
-            raise FirstTokenTimeoutError(f"No response within {first_token_timeout} seconds")
-        except StopAsyncIteration:
-            # Empty response - this is normal, just finish
-            logger.debug("Empty response from Kiro API")
-            return
-        
-        # Process first chunk
-        if debug_logger:
-            debug_logger.log_raw_chunk(first_byte_chunk)
-        
-        async for event in _process_chunk(parser, first_byte_chunk, thinking_parser):
-            if event.type == "content" or event.type == "thinking":
-                first_token_received = True
-            yield event
-        
-        # Continue reading remaining chunks
-        async for chunk in byte_iterator:
+        async for chunk_or_none in _iter_bytes_with_heartbeat(byte_iterator, heartbeat_interval):
+            if chunk_or_none is None:
+                # No bytes from Kiro for heartbeat_interval seconds.
+                time_without_data += heartbeat_interval
+                if not first_byte_received and time_without_data >= first_token_timeout:
+                    logger.warning(
+                        f"[FirstTokenTimeout] Model did not respond within {first_token_timeout}s"
+                    )
+                    raise FirstTokenTimeoutError(
+                        f"No response within {first_token_timeout} seconds"
+                    )
+                logger.debug(
+                    f"No data for {time_without_data:.0f}s, sending heartbeat to client"
+                )
+                yield KiroEvent(type="heartbeat")
+                continue
+
+            # Received actual bytes from Kiro.
+            chunk: bytes = chunk_or_none
+            if not first_byte_received:
+                first_byte_received = True
+                logger.debug("First byte received from Kiro")
+            time_without_data = 0.0  # Reset idle counter on every received chunk
+
             if debug_logger:
                 debug_logger.log_raw_chunk(chunk)
-            
+
             async for event in _process_chunk(parser, chunk, thinking_parser):
                 yield event
-        
+
+        # Iterator exhausted — stream ended normally.
+        if not first_byte_received:
+            logger.debug("Empty response from Kiro API")
+            return
+
         # Finalize thinking parser and yield any remaining content
         if thinking_parser:
             final_result = thinking_parser.finalize()
-            
+
             if final_result.thinking_content:
                 processed_thinking = thinking_parser.process_for_output(
                     final_result.thinking_content,
@@ -200,21 +262,17 @@ async def parse_kiro_stream(
                         is_first_thinking_chunk=final_result.is_first_thinking_chunk,
                         is_last_thinking_chunk=final_result.is_last_thinking_chunk,
                     )
-            
+
             if final_result.regular_content:
                 yield KiroEvent(type="content", content=final_result.regular_content)
-            
+
             if thinking_parser.found_thinking_block:
                 logger.debug("Thinking block processing completed")
-        
-        # Check bracket-style tool calls in accumulated content
-        all_tool_calls = parser.get_tool_calls()
-        # Note: bracket tool calls are checked by the caller using full content
-        
-        # Yield tool calls if any
-        for tc in all_tool_calls:
+
+        # Yield structured tool calls accumulated by the parser
+        for tc in parser.get_tool_calls():
             yield KiroEvent(type="tool_use", tool_use=tc)
-            
+
     except FirstTokenTimeoutError:
         raise
     except GeneratorExit:
@@ -309,7 +367,10 @@ async def collect_stream_to_result(
     full_content_for_bracket_tools = ""
     
     async for event in parse_kiro_stream(response, first_token_timeout, enable_thinking_parser):
-        if event.type == "content" and event.content:
+        if event.type == "heartbeat":
+            # Non-streaming collection: no client to ping, just skip
+            continue
+        elif event.type == "content" and event.content:
             result.content += event.content
             full_content_for_bracket_tools += event.content
         elif event.type == "thinking" and event.thinking_content:

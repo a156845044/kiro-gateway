@@ -366,6 +366,15 @@ STREAMING_READ_TIMEOUT: float = float(os.getenv("STREAMING_READ_TIMEOUT", "300")
 # Default: 3 attempts
 FIRST_TOKEN_MAX_RETRIES: int = int(os.getenv("FIRST_TOKEN_MAX_RETRIES", "3"))
 
+# Heartbeat interval for SSE streams (in seconds).
+# While waiting for the first token from Kiro, the gateway sends keepalive events
+# to the client at this interval. This prevents clients (Claude Code, Cursor, etc.)
+# from timing out on idle connections before Kiro starts responding.
+# - OpenAI format: sends SSE comment lines (": keep-alive")
+# - Anthropic format: sends proper "ping" events per Anthropic spec
+# Default: 5 seconds. Set to 0 to disable heartbeats.
+HEARTBEAT_INTERVAL: float = float(os.getenv("HEARTBEAT_INTERVAL", "5"))
+
 # ==================================================================================================
 # Debug Settings
 # ==================================================================================================
