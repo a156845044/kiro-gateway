@@ -245,6 +245,9 @@ class AwsEventStreamParser:
         ('{"stop":', 'tool_stop'),
         ('{"followupPrompt":', 'followup'),
         ('{"usage":', 'usage'),
+        # meteringEvent: {"unit":"credit","unitPlural":"credits","usage":N}
+        # The first key is "unit", not "usage", so we match on the outer key.
+        ('{"unit":', 'metering'),
         ('{"contextUsagePercentage":', 'context_usage'),
     ]
     
@@ -326,6 +329,13 @@ class AwsEventStreamParser:
             return self._process_tool_stop_event(data)
         elif event_type == 'usage':
             return {"type": "usage", "data": data.get('usage', 0)}
+        elif event_type == 'metering':
+            # meteringEvent: {"unit":"credit","unitPlural":"credits","usage":N}
+            # Extract the numeric usage value and forward as a "usage" event so
+            # existing consumers (streaming_openai, streaming_anthropic) pick it up.
+            usage_value = data.get('usage', 0)
+            logger.debug(f"[Parser] meteringEvent: unit={data.get('unit')!r}, usage={usage_value!r}")
+            return {"type": "usage", "data": usage_value}
         elif event_type == 'context_usage':
             return {"type": "context_usage", "data": data.get('contextUsagePercentage', 0)}
         
