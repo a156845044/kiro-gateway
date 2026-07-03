@@ -109,7 +109,14 @@ async def get_usage_viewer() -> HTMLResponse:
     """
     viewer_path = _usage_viewer_path()
     try:
-        return HTMLResponse(viewer_path.read_text(encoding="utf-8"))
+        content = viewer_path.read_text(encoding="utf-8")
+        return HTMLResponse(
+            content,
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+            },
+        )
     except FileNotFoundError as error:
         logger.error(f"Usage viewer file not found: {viewer_path}")
         raise HTTPException(status_code=404, detail="Usage viewer not found") from error
