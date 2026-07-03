@@ -501,9 +501,55 @@ function renderModels(data) {
       : '';
     const name = m.name && m.name !== m.id
       ? `<span class="ml-1.5 text-slate-500">${esc(m.name)}</span>` : '';
-    return `<span class="inline-flex items-center rounded-lg border ${border} px-2.5 py-1 text-xs">
-      <span class="font-mono text-slate-200">${esc(m.id)}</span>${name}${badge}</span>`;
+    return `<button type="button" data-model-id="${esc(m.id)}"
+      class="model-chip group inline-flex items-center rounded-lg border ${border} px-2.5 py-1 text-xs transition hover:border-cyan-400 hover:bg-cyan-500/10 cursor-pointer"
+      title="Click to copy model ID">
+      <span class="font-mono text-slate-200">${esc(m.id)}</span>${name}${badge}
+      <i data-lucide="copy" class="ml-1.5 h-3 w-3 text-slate-500 group-hover:text-cyan-300"></i>
+    </button>`;
   }).join('');
+  lucide.createIcons({ nodes: [el] });
+
+  // Attach click-to-copy handlers
+  el.querySelectorAll('.model-chip').forEach(chip => {
+    chip.addEventListener('click', () => copyModelId(chip));
+  });
+}
+
+// Copy a model ID to clipboard and show brief visual feedback.
+async function copyModelId(chip) {
+  const id = chip.dataset.modelId;
+  try {
+    await navigator.clipboard.writeText(id);
+  } catch (_) {
+    // Fallback for non-secure contexts (http://)
+    const ta = document.createElement('textarea');
+    ta.value = id;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); } catch (e) {}
+    document.body.removeChild(ta);
+  }
+  // Flash feedback: swap icon to check + green border briefly
+  const icon = chip.querySelector('i');
+  const prevBorder = chip.className;
+  chip.classList.add('border-emerald-400', 'bg-emerald-500/10');
+  if (icon) {
+    icon.setAttribute('data-lucide', 'check');
+    lucide.createIcons({ nodes: [chip] });
+    icon.classList.remove('text-slate-500');
+    icon.classList.add('text-emerald-400');
+  }
+  setTimeout(() => {
+    chip.className = prevBorder;
+    const ic = chip.querySelector('i');
+    if (ic) {
+      ic.setAttribute('data-lucide', 'copy');
+      lucide.createIcons({ nodes: [chip] });
+    }
+  }, 1200);
 }
 
 // ── SVG Line Chart ────────────────────────────────────────────────────────
