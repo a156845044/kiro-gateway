@@ -1081,6 +1081,61 @@ class TestStreamingAnthropicContextUsage:
         assert len(message_delta_events) >= 1
         assert "output_tokens" in message_delta_events[0]
         print("✓ Tokens calculated from context usage")
+
+    @pytest.mark.asyncio
+    async def test_records_usage_event_after_stream_completion(
+        self,
+        tmp_path,
+        mock_response,
+        mock_model_cache,
+        mock_auth_manager,
+    ):
+        """
+        What it does: Records usage data after the stream finishes.
+        Goal: Verify usage tracking captures Anthropic streaming completions.
+        """
+        from kiro.usage_tracker import UsageTracker
+
+        tracker = UsageTracker(str(tmp_path / "usage.sqlite"))
+
+        async def mock_parse_kiro_stream(*args, **kwargs):
+            yield KiroEvent(type="content", content="Hello")
+            yield KiroEvent(
+                type="usage",
+                usage={"credits": 0.5, "cacheReadInputTokens": 12},
+            )
+            yield KiroEvent(type="context_usage", context_usage_percentage=5.0)
+
+        events = []
+
+        with patch("kiro.streaming_anthropic.parse_kiro_stream", mock_parse_kiro_stream):
+            with patch("kiro.streaming_anthropic.parse_bracket_tool_calls", return_value=[]):
+                with patch("kiro.streaming_anthropic.usage_tracker", tracker):
+                    with patch("kiro.streaming_anthropic.count_tokens", return_value=9):
+                        with patch(
+                            "kiro.streaming_anthropic.calculate_tokens_from_context_usage",
+                            return_value=(14, 23, "context_usage", "context_usage"),
+                        ):
+                            async for event in stream_kiro_to_anthropic(
+                                mock_response,
+                                "claude-sonnet-4",
+                                mock_model_cache,
+                                mock_auth_manager,
+                                conversation_id="conversation-abc",
+                            ):
+                                events.append(event)
+
+        events_page = tracker.get_events_page("day", page=1, page_size=10)
+
+        assert any("message_stop" in event for event in events)
+        assert events_page["total"] == 1
+        assert events_page["items"][0]["model"] == "claude-sonnet-4"
+        assert events_page["items"][0]["endpoint"] == "messages"
+        assert events_page["items"][0]["input_tokens"] == 14
+        assert events_page["items"][0]["output_tokens"] == 9
+        assert events_page["items"][0]["total_tokens"] == 23
+        assert events_page["items"][0]["credits_used"] == pytest.approx(0.5)
+        assert events_page["items"][0]["session_id"] == "conversation-abc"
     
     @pytest.mark.asyncio
     async def test_uses_request_messages_for_input_tokens(self, mock_response, mock_model_cache, mock_auth_manager):

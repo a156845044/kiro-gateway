@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Token Usage Viewer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body class="min-h-screen bg-slate-950 text-slate-100">
+    <div class="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+        <div class="mb-8 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+                <p class="mb-2 inline-flex items-center gap-2 rounded-full border border-cyan-500/30 bg-cyan-500/10 px-3 py-1 text-xs font-medium text-cyan-300">
+                    <i data-lucide="activity" class="h-4 w-4"></i>
+                    Kiro Gateway Usage
+                </p>
+                <h1 class="text-3xl font-bold tracking-tight">Token Usage Viewer</h1>
+                <p class="mt-2 text-sm text-slate-400">Inspect token usage, per-model totals, daily trends, and recent request events.</p>
+            </div>
+            <div id="statusBadge" class="inline-flex items-center gap-2 rounded-full border border-slate-700 bg-slate-900/80 px-3 py-2 text-sm text-slate-300">
+                <i data-lucide="circle" class="h-4 w-4 text-slate-500"></i>
+                Ready
+            </div>
+        </div>
+
+        <form id="controlsForm" class="mb-6 rounded-2xl border border-slate-800 bg-slate-900/80 p-4 shadow-2xl shadow-slate-950/30">
+            <div class="grid gap-4 lg:grid-cols-[1fr_180px_120px]">
+                <label class="block">
+                    <span class="mb-2 block text-sm font-medium text-slate-300">Token usage endpoint</span>
+                    <input id="endpointInput" type="url" class="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm text-slate-100 outline-none transition focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/30" placeholder="http://localhost:8000/token-usage">
+                </label>
+                <label class="block">
+                    <span class="mb-2 block text-sm font-medium text-slate-300">Period</span>
+                    <select id="periodSelect" class="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm text-slate-100 outline-none transition focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/30">
+                        <option value="day">Last 24 hours</option>
+                        <option value="week">Last 7 days</option>
+                        <option value="month">Last 30 days</option>
+                    </select>
+                </label>
+                <div class="flex items-end">
+                    <button type="submit" class="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-cyan-500 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-cyan-400">
+                        <i data-lucide="refresh-cw" class="h-4 w-4"></i>
+                        Refresh
+                    </button>
+                </div>
+            </div>
+        </form>
+
+        <div class="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+            <section class="rounded-2xl border border-slate-800 bg-slate-900/80 p-5">
+                <div class="mb-4 flex items-center justify-between">
+                    <span class="text-sm text-slate-400">Requests</span>
+                    <i data-lucide="messages-square" class="h-5 w-5 text-cyan-300"></i>
+                </div>
+                <div id="totalRequests" class="text-3xl font-semibold">0</div>
+            </section>
+            <section class="rounded-2xl border border-slate-800 bg-slate-900/80 p-5">
+                <div class="mb-4 flex items-center justify-between">
+                    <span class="text-sm text-slate-400">Input tokens</span>
+                    <i data-lucide="arrow-down-to-line" class="h-5 w-5 text-violet-300"></i>
+                </div>
+                <div id="totalInputTokens" class="text-3xl font-semibold">0</div>
+            </section>
+            <section class="rounded-2xl border border-slate-800 bg-slate-900/80 p-5">
+                <div class="mb-4 flex items-center justify-between">
+                    <span class="text-sm text-slate-400">Output tokens</span>
+                    <i data-lucide="arrow-up-from-line" class="h-5 w-5 text-emerald-300"></i>
+                </div>
+                <div id="totalOutputTokens" class="text-3xl font-semibold">0</div>
+            </section>
+            <section class="rounded-2xl border border-slate-800 bg-slate-900/80 p-5">
+                <div class="mb-4 flex items-center justify-between">
+                    <span class="text-sm text-slate-400">Total tokens</span>
+                    <i data-lucide="sigma" class="h-5 w-5 text-amber-300"></i>
+                </div>
+                <div id="totalTokens" class="text-3xl font-semibold">0</div>
+            </section>
+            <section class="rounded-2xl border border-slate-800 bg-slate-900/80 p-5">
+                <div class="mb-4 flex items-center justify-between">
+                    <span class="text-sm text-slate-400">Credits used</span>
+                    <i data-lucide="coins" class="h-5 w-5 text-pink-300"></i>
+                </div>
+                <div id="totalCreditsUsed" class="text-3xl font-semibold">0.0000</div>
+            </section>
+        </div>
+
+        <div class="mb-6 grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
+            <section class="rounded-2xl border border-slate-800 bg-slate-900/80 p-5">
+                <div class="mb-4 flex items-center justify-between">
+                    <div>
+                        <h2 class="text-lg font-semibold">By model</h2>
+                        <p class="text-sm text-slate-400">Sorted by total tokens in the selected range.</p>
+                    </div>
+                    <i data-lucide="bot" class="h-5 w-5 text-cyan-300"></i>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="min-w-full text-left text-sm">
+                        <thead class="text-slate-400">
+                            <tr class="border-b border-slate-800">
+                                <th class="px-3 py-3 font-medium">Model</th>
+                                <th class="px-3 py-3 font-medium">Requests</th>
+                                <th class="px-3 py-3 font-medium">Input</th>
+                                <th class="px-3 py-3 font-medium">Output</th>
+                                <th class="px-3 py-3 font-medium">Total</th>
+                                <th class="px-3 py-3 font-medium">Credits</th>
+                            </tr>
+                        </thead>
+                        <tbody id="modelTableBody" class="divide-y divide-slate-800"></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section class="rounded-2xl border border-slate-800 bg-slate-900/80 p-5">
+                <div class="mb-4 flex items-center justify-between">
+                    <div>
+                        <h2 class="text-lg font-semibold">Daily trend</h2>
+                        <p class="text-sm text-slate-400">Total tokens per day for the selected period.</p>
+                    </div>
+                    <i data-lucide="bar-chart-3" class="h-5 w-5 text-cyan-300"></i>
+                </div>
+                <canvas id="dailyChart" height="260" class="w-full rounded-xl bg-slate-950"></canvas>
+            </section>
+        </div>
+
+        <section class="rounded-2xl border border-slate-800 bg-slate-900/80 p-5">
+            <div class="mb-4 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                    <h2 class="text-lg font-semibold">Recent events</h2>
+                    <p class="text-sm text-slate-400">Newest usage events first.</p>
+                </div>
+                <div class="flex items-center gap-3">
+                    <button id="previousPageButton" type="button" class="inline-flex items-center gap-2 rounded-xl border border-slate-700 px-3 py-2 text-sm text-slate-200 transition hover:border-cyan-500 hover:text-cyan-300">
+                        <i data-lucide="chevron-left" class="h-4 w-4"></i>
+                        Previous
+                    </button>
+                    <span id="pageIndicator" class="text-sm text-slate-300">Page 1 of 1</span>
+                    <button id="nextPageButton" type="button" class="inline-flex items-center gap-2 rounded-xl border border-slate-700 px-3 py-2 text-sm text-slate-200 transition hover:border-cyan-500 hover:text-cyan-300">
+                        Next
+                        <i data-lucide="chevron-right" class="h-4 w-4"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="min-w-full text-left text-sm">
+                    <thead class="text-slate-400">
+                        <tr class="border-b border-slate-800">
+                            <th class="px-3 py-3 font-medium">Time (UTC)</th>
+                            <th class="px-3 py-3 font-medium">Model</th>
+                            <th class="px-3 py-3 font-medium">Endpoint</th>
+                            <th class="px-3 py-3 font-medium">Input</th>
+                            <th class="px-3 py-3 font-medium">Output</th>
+                            <th class="px-3 py-3 font-medium">Total</th>
+                            <th class="px-3 py-3 font-medium">Credits</th>
+                            <th class="px-3 py-3 font-medium">Session</th>
+                        </tr>
+                    </thead>
+                    <tbody id="eventsTableBody" class="divide-y divide-slate-800"></tbody>
+                </table>
+            </div>
+        </section>
+    </div>
+
+    <script>
+        const pageSize = 20;
+        let currentPage = 1;
+        let latestSummary = null;
+        let latestDailySummary = null;
+        let latestEventsPage = null;
+
+        function normalizeEndpoint(endpoint) {
+            return (endpoint || "").trim().replace(/\/+$/, "");
+        }
+
+        function escapeHtml(value) {
+            return String(value ?? "")
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+
+        function formatInteger(value) {
+            return Number(value || 0).toLocaleString();
+        }
+
+        function formatCredits(value) {
+            return Number(value || 0).toFixed(4);
+        }
+
+        function getBaseEndpointFromUrl() {
+            const url = new URL(window.location.href);
+            const endpoint = url.searchParams.get("endpoint");
+            return normalizeEndpoint(endpoint || `${window.location.origin}/token-usage`);
+        }
+
+        function updateUrl(endpoint, period) {
+            const url = new URL(window.location.href);
+            url.searchParams.set("endpoint", endpoint);
+            url.searchParams.set("period", period);
+            window.history.replaceState({}, "", url);
+        }
+
+        function setStatus(text, tone) {
+            const statusBadge = document.getElementById("statusBadge");
+            const toneClasses = {
+                idle: "border-slate-700 bg-slate-900/80 text-slate-300",
+                loading: "border-cyan-500/30 bg-cyan-500/10 text-cyan-300",
+                success: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
+                error: "border-rose-500/30 bg-rose-500/10 text-rose-300"
+            };
+            statusBadge.className = `inline-flex items-center gap-2 rounded-full px-3 py-2 text-sm ${toneClasses[tone] || toneClasses.idle}`;
+            statusBadge.innerHTML = `<i data-lucide="circle" class="h-4 w-4"></i>${escapeHtml(text)}`;
+            lucide.createIcons();
+        }
+
+        function renderSummary(summary) {
+            latestSummary = summary;
+            const totals = summary?.totals || {};
+            document.getElementById("totalRequests").textContent = formatInteger(totals.request_count);
+            document.getElementById("totalInputTokens").textContent = formatInteger(totals.input_tokens);
+            document.getElementById("totalOutputTokens").textContent = formatInteger(totals.output_tokens);
+            document.getElementById("totalTokens").textContent = formatInteger(totals.total_tokens);
+            document.getElementById("totalCreditsUsed").textContent = formatCredits(totals.credits_used);
+
+            const tableBody = document.getElementById("modelTableBody");
+            const rows = summary?.byModel || [];
+            if (!rows.length) {
+                tableBody.innerHTML = `<tr><td colspan="6" class="px-3 py-6 text-center text-slate-500">No usage data for this period.</td></tr>`;
+                return;
+            }
+
+            tableBody.innerHTML = rows.map((row) => `
+                <tr>
+                    <td class="px-3 py-3 font-medium text-slate-100">${escapeHtml(row.model)}</td>
+                    <td class="px-3 py-3 text-slate-300">${formatInteger(row.request_count)}</td>
+                    <td class="px-3 py-3 text-slate-300">${formatInteger(row.input_tokens)}</td>
+                    <td class="px-3 py-3 text-slate-300">${formatInteger(row.output_tokens)}</td>
+                    <td class="px-3 py-3 text-slate-300">${formatInteger(row.total_tokens)}</td>
+                    <td class="px-3 py-3 text-slate-300">${formatCredits(row.credits_used)}</td>
+                </tr>
+            `).join("");
+        }
+
+        function renderDailyChart(summary) {
+            latestDailySummary = summary;
+            const canvas = document.getElementById("dailyChart");
+            const context = canvas.getContext("2d");
+            const days = summary?.days || [];
+
+            const deviceRatio = window.devicePixelRatio || 1;
+            const width = canvas.clientWidth || 600;
+            const height = canvas.height;
+            canvas.width = width * deviceRatio;
+            canvas.height = height * deviceRatio;
+            context.setTransform(deviceRatio, 0, 0, deviceRatio, 0, 0);
+
+            context.clearRect(0, 0, width, height);
+            context.fillStyle = "#020617";
+            context.fillRect(0, 0, width, height);
+
+            if (!days.length) {
+                context.fillStyle = "#64748b";
+                context.font = "14px sans-serif";
+                context.fillText("No daily usage data available.", 24, 40);
+                return;
+            }
+
+            const padding = { top: 24, right: 16, bottom: 48, left: 16 };
+            const chartWidth = width - padding.left - padding.right;
+            const chartHeight = height - padding.top - padding.bottom;
+            const maxValue = Math.max(...days.map((day) => Number(day.totals?.total_tokens || 0)), 1);
+            const barWidth = Math.max(chartWidth / Math.max(days.length * 1.7, 1), 20);
+            const gap = days.length > 1 ? (chartWidth - barWidth * days.length) / (days.length - 1) : 0;
+
+            context.strokeStyle = "#1e293b";
+            context.lineWidth = 1;
+            for (let i = 0; i <= 4; i += 1) {
+                const y = padding.top + (chartHeight / 4) * i;
+                context.beginPath();
+                context.moveTo(padding.left, y);
+                context.lineTo(width - padding.right, y);
+                context.stroke();
+            }
+
+            days.forEach((day, index) => {
+                const value = Number(day.totals?.total_tokens || 0);
+                const x = padding.left + index * (barWidth + gap);
+                const barHeight = (value / maxValue) * chartHeight;
+                const y = padding.top + chartHeight - barHeight;
+
+                context.fillStyle = "#06b6d4";
+                context.fillRect(x, y, barWidth, barHeight);
+
+                context.fillStyle = "#e2e8f0";
+                context.font = "11px sans-serif";
+                context.fillText(String(value), x, Math.max(y - 6, 14));
+
+                context.fillStyle = "#94a3b8";
+                const label = String(day.date).slice(5);
+                context.fillText(label, x, height - 18);
+            });
+        }
+
+        function renderEvents(pageData) {
+            latestEventsPage = pageData;
+            const tableBody = document.getElementById("eventsTableBody");
+            const items = pageData?.items || [];
+
+            if (!items.length) {
+                tableBody.innerHTML = `<tr><td colspan="8" class="px-3 py-6 text-center text-slate-500">No events found for this period.</td></tr>`;
+            } else {
+                tableBody.innerHTML = items.map((item) => `
+                    <tr>
+                        <td class="px-3 py-3 text-slate-300">${escapeHtml(item.created_at_utc)}</td>
+                        <td class="px-3 py-3 font-medium text-slate-100">${escapeHtml(item.model)}</td>
+                        <td class="px-3 py-3 text-slate-300">${escapeHtml(item.endpoint)}</td>
+                        <td class="px-3 py-3 text-slate-300">${formatInteger(item.input_tokens)}</td>
+                        <td class="px-3 py-3 text-slate-300">${formatInteger(item.output_tokens)}</td>
+                        <td class="px-3 py-3 text-slate-300">${formatInteger(item.total_tokens)}</td>
+                        <td class="px-3 py-3 text-slate-300">${formatCredits(item.credits_used)}</td>
+                        <td class="px-3 py-3 text-slate-400">${escapeHtml(item.session_id || "")}</td>
+                    </tr>
+                `).join("");
+            }
+
+            const totalPages = Number(pageData?.total_pages || 0);
+            const page = Number(pageData?.page || 1);
+            document.getElementById("pageIndicator").textContent = `Page ${page} of ${Math.max(totalPages, 1)}`;
+            document.getElementById("previousPageButton").disabled = page <= 1;
+            document.getElementById("nextPageButton").disabled = totalPages === 0 || page >= totalPages;
+        }
+
+        async function fetchJson(url) {
+            const response = await fetch(url);
+            if (!response.ok) {
+                let message = `${response.status} ${response.statusText}`;
+                try {
+                    const payload = await response.json();
+                    message = payload.detail || payload.message || message;
+                } catch (error) {
+                    console.warn("Failed to parse error payload", error);
+                }
+                throw new Error(message);
+            }
+            return response.json();
+        }
+
+        async function loadDashboard(page = 1) {
+            const endpoint = normalizeEndpoint(document.getElementById("endpointInput").value);
+            const period = document.getElementById("periodSelect").value;
+
+            if (!endpoint) {
+                setStatus("Enter a valid endpoint URL.", "error");
+                return;
+            }
+
+            currentPage = page;
+            updateUrl(endpoint, period);
+            setStatus("Loading usage data...", "loading");
+
+            try {
+                const summaryUrl = `${endpoint}?period=${encodeURIComponent(period)}`;
+                const dailyUrl = `${endpoint}/daily?period=${encodeURIComponent(period)}`;
+                const eventsUrl = `${endpoint}/events?period=${encodeURIComponent(period)}&page=${page}&page_size=${pageSize}`;
+
+                const [summary, daily, events] = await Promise.all([
+                    fetchJson(summaryUrl),
+                    fetchJson(dailyUrl),
+                    fetchJson(eventsUrl)
+                ]);
+
+                renderSummary(summary);
+                renderDailyChart(daily);
+                renderEvents(events);
+                setStatus("Usage data loaded.", "success");
+            } catch (error) {
+                console.error(error);
+                renderSummary({ totals: {}, byModel: [] });
+                renderDailyChart({ days: [] });
+                renderEvents({ items: [], page: 1, total_pages: 0 });
+                setStatus(`Failed to load usage data: ${error.message}`, "error");
+            }
+        }
+
+        document.getElementById("controlsForm").addEventListener("submit", async (event) => {
+            event.preventDefault();
+            await loadDashboard(1);
+        });
+
+        document.getElementById("previousPageButton").addEventListener("click", async () => {
+            if (currentPage > 1) {
+                await loadDashboard(currentPage - 1);
+            }
+        });
+
+        document.getElementById("nextPageButton").addEventListener("click", async () => {
+            const totalPages = Number(latestEventsPage?.total_pages || 0);
+            if (currentPage < totalPages) {
+                await loadDashboard(currentPage + 1);
+            }
+        });
+
+        window.addEventListener("resize", () => {
+            if (latestDailySummary) {
+                renderDailyChart(latestDailySummary);
+            }
+        });
+
+        document.addEventListener("DOMContentLoaded", async () => {
+            const initialEndpoint = getBaseEndpointFromUrl();
+            const initialPeriod = new URL(window.location.href).searchParams.get("period") || "day";
+            document.getElementById("endpointInput").value = initialEndpoint;
+            document.getElementById("periodSelect").value = ["day", "week", "month"].includes(initialPeriod) ? initialPeriod : "day";
+            lucide.createIcons();
+            await loadDashboard(1);
+        });
+    </script>
+</body>
+</html>

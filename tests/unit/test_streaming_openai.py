@@ -1354,6 +1354,60 @@ class TestStreamingOpenaiMeteringData:
         assert '"credits_used"' in final_chunk
         print("✓ credits_used included in usage")
 
+    @pytest.mark.asyncio
+    async def test_records_usage_event_after_stream_completion(
+        self,
+        tmp_path,
+        mock_http_client,
+        mock_response,
+        mock_model_cache,
+        mock_auth_manager,
+    ):
+        """
+        What it does: Records usage data after the stream finishes.
+        Goal: Verify usage tracking captures OpenAI streaming completions.
+        """
+        from kiro.usage_tracker import UsageTracker
+
+        tracker = UsageTracker(str(tmp_path / "usage.sqlite"))
+
+        async def mock_parse_kiro_stream(*args, **kwargs):
+            yield KiroEvent(type="content", content="Hello")
+            yield KiroEvent(type="usage", usage={"credits": 0.25})
+            yield KiroEvent(type="context_usage", context_usage_percentage=5.0)
+
+        chunks = []
+
+        with patch("kiro.streaming_openai.parse_kiro_stream", mock_parse_kiro_stream):
+            with patch("kiro.streaming_openai.parse_bracket_tool_calls", return_value=[]):
+                with patch("kiro.streaming_openai.usage_tracker", tracker):
+                    with patch("kiro.streaming_openai.count_tokens", return_value=7):
+                        with patch(
+                            "kiro.streaming_openai.calculate_tokens_from_context_usage",
+                            return_value=(11, 18, "context_usage", "context_usage"),
+                        ):
+                            async for chunk in stream_kiro_to_openai(
+                                mock_http_client,
+                                mock_response,
+                                "claude-sonnet-4",
+                                mock_model_cache,
+                                mock_auth_manager,
+                                conversation_id="conversation-123",
+                            ):
+                                chunks.append(chunk)
+
+        events_page = tracker.get_events_page("day", page=1, page_size=10)
+
+        assert chunks[-1] == "data: [DONE]\n\n"
+        assert events_page["total"] == 1
+        assert events_page["items"][0]["model"] == "claude-sonnet-4"
+        assert events_page["items"][0]["endpoint"] == "chat_completions"
+        assert events_page["items"][0]["input_tokens"] == 11
+        assert events_page["items"][0]["output_tokens"] == 7
+        assert events_page["items"][0]["total_tokens"] == 18
+        assert events_page["items"][0]["credits_used"] == pytest.approx(0.25)
+        assert events_page["items"][0]["session_id"] == "conversation-123"
+
 
 # ==================================================================================================
 # Tests for truncation detection

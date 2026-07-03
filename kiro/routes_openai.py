@@ -389,7 +389,8 @@ async def chat_completions(request: Request, request_data: ChatCompletionRequest
                                     auth_manager=auth_manager,
                                     initial_response=response,
                                     request_messages=messages_for_tokenizer,
-                                    request_tools=tools_for_tokenizer
+                                    request_tools=tools_for_tokenizer,
+                                    conversation_id=conversation_id,
                                 ):
                                     yield chunk
                             except GeneratorExit:
@@ -685,7 +686,8 @@ async def chat_completions(request: Request, request_data: ChatCompletionRequest
                         auth_manager=auth_manager,
                         initial_response=response,
                         request_messages=messages_for_tokenizer,
-                        request_tools=tools_for_tokenizer
+                        request_tools=tools_for_tokenizer,
+                        conversation_id=conversation_id,
                     ):
                         yield chunk
                 except GeneratorExit:

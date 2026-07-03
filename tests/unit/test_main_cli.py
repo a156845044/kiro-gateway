@@ -276,8 +276,8 @@ class TestPrintStartupBanner:
         captured = capsys.readouterr()
         print(f"Captured output length: {len(captured.out)}")
         
-        # When host is 0.0.0.0, display should show localhost
-        assert "localhost:8000" in captured.out or "8000" in captured.out
+        # When host is 0.0.0.0, display should show 127.0.0.1 for browsing
+        assert "127.0.0.1:8000" in captured.out
     
     def test_banner_contains_custom_port(self, capsys):
         """
@@ -326,6 +326,26 @@ class TestPrintStartupBanner:
         print(f"Captured output contains '/health': {'/health' in captured.out}")
         
         assert "/health" in captured.out
+
+    def test_banner_contains_usage_viewer_url(self, capsys):
+        """
+        What it does: Verifies that banner contains the usage viewer URL.
+        Purpose: Ensure the dashboard entrypoint is shown with the endpoint query param.
+        """
+        print("Setup: Importing print_startup_banner...")
+        from main import print_startup_banner
+
+        print("Action: Calling print_startup_banner('0.0.0.0', 8000)...")
+        print_startup_banner("0.0.0.0", 8000)
+
+        captured = capsys.readouterr()
+        expected_url = (
+            "http://127.0.0.1:8000/usage-viewer"
+            "?endpoint=http://127.0.0.1:8000/token-usage"
+        )
+        print(f"Expected usage viewer URL: {expected_url}")
+
+        assert expected_url in captured.out
 
 
 class TestCliHelp:

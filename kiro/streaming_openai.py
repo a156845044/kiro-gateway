@@ -29,6 +29,7 @@ Uses streaming_core.py for parsing Kiro stream into unified KiroEvent objects.
 """
 
 import json
+import sqlite3
 import time
 from typing import TYPE_CHECKING, AsyncGenerator, Callable, Awaitable, Optional
 
@@ -53,6 +54,7 @@ from kiro.streaming_core import (
     calculate_tokens_from_context_usage,
     stream_with_first_token_retry as stream_with_first_token_retry_core,
 )
+from kiro.usage_tracker import usage_tracker
 
 if TYPE_CHECKING:
     from kiro.auth import KiroAuthManager
@@ -419,6 +421,18 @@ async def stream_kiro_to_openai_internal(
         )
         
         yield f"data: {json.dumps(final_chunk, ensure_ascii=False)}\n\n"
+        try:
+            usage_tracker.record_event(
+                model=model,
+                endpoint="chat_completions",
+                input_tokens=prompt_tokens,
+                output_tokens=completion_tokens,
+                total_tokens=total_tokens,
+                credits_used=metering_data,
+                session_id=conversation_id or "",
+            )
+        except sqlite3.Error as error:
+            logger.error(f"Failed to persist OpenAI usage event: {error}")
         yield "data: [DONE]\n\n"
         
     except FirstTokenTimeoutError:
@@ -459,7 +473,8 @@ async def stream_kiro_to_openai(
     model_cache: "ModelInfoCache",
     auth_manager: "KiroAuthManager",
     request_messages: Optional[list] = None,
-    request_tools: Optional[list] = None
+    request_tools: Optional[list] = None,
+    conversation_id: Optional[str] = None,
 ) -> AsyncGenerator[str, None]:
     """
     Generator for converting Kiro stream to OpenAI format.
@@ -475,6 +490,7 @@ async def stream_kiro_to_openai(
         auth_manager: Authentication manager
         request_messages: Original request messages (for fallback token counting)
         request_tools: Original request tools (for fallback token counting)
+        conversation_id: Stable conversation ID for usage tracking and recovery
     
     Yields:
         Strings in SSE format: "data: {...}\\n\\n" or "data: [DONE]\\n\\n"
@@ -482,7 +498,8 @@ async def stream_kiro_to_openai(
     async for chunk in stream_kiro_to_openai_internal(
         client, response, model, model_cache, auth_manager,
         request_messages=request_messages,
-        request_tools=request_tools
+        request_tools=request_tools,
+        conversation_id=conversation_id,
     ):
         yield chunk
 
@@ -497,7 +514,8 @@ async def stream_with_first_token_retry(
     max_retries: int = FIRST_TOKEN_MAX_RETRIES,
     first_token_timeout: float = FIRST_TOKEN_TIMEOUT,
     request_messages: Optional[list] = None,
-    request_tools: Optional[list] = None
+    request_tools: Optional[list] = None,
+    conversation_id: Optional[str] = None,
 ) -> AsyncGenerator[str, None]:
     """
     Streaming with automatic retry on first token timeout.
@@ -522,6 +540,7 @@ async def stream_with_first_token_retry(
         first_token_timeout: First token wait timeout (seconds)
         request_messages: Original request messages (for fallback token counting)
         request_tools: Original request tools (for fallback token counting)
+        conversation_id: Stable conversation ID for usage tracking and recovery
     
     Yields:
         Strings in SSE format
@@ -562,7 +581,8 @@ async def stream_with_first_token_retry(
             auth_manager,
             first_token_timeout=first_token_timeout,
             request_messages=request_messages,
-            request_tools=request_tools
+            request_tools=request_tools,
+            conversation_id=conversation_id,
         ):
             yield chunk
     

@@ -32,6 +32,7 @@ Reference: https://docs.anthropic.com/en/api/messages-streaming
 """
 
 import json
+import sqlite3
 import time
 import uuid
 from typing import TYPE_CHECKING, AsyncGenerator, Dict, List, Optional, Any
@@ -50,6 +51,7 @@ from kiro.streaming_core import (
 from kiro.tokenizer import count_tokens, estimate_request_tokens
 from kiro.parsers import parse_bracket_tool_calls, deduplicate_tool_calls
 from kiro.config import FIRST_TOKEN_TIMEOUT, FIRST_TOKEN_MAX_RETRIES, FAKE_REASONING_HANDLING
+from kiro.usage_tracker import usage_tracker
 
 if TYPE_CHECKING:
     from kiro.auth import KiroAuthManager
@@ -197,6 +199,7 @@ async def stream_kiro_to_anthropic(
     # Track context usage for token calculation
     context_usage_percentage: Optional[float] = None
     upstream_cache_usage: Dict[str, int] = {}
+    upstream_usage_data: Optional[Dict[str, Any]] = None
     
     # Track truncated tool calls for recovery
     truncated_tools: List[Dict[str, Any]] = []
@@ -526,6 +529,7 @@ async def stream_kiro_to_anthropic(
             elif event.type == "context_usage" and event.context_usage_percentage is not None:
                 context_usage_percentage = event.context_usage_percentage
             elif event.type == "usage" and event.usage:
+                upstream_usage_data = event.usage
                 upstream_cache_usage.update(_extract_cache_usage_fields(event.usage))
         
         # Track completion signals for truncation detection
@@ -666,6 +670,18 @@ async def stream_kiro_to_anthropic(
         yield format_sse_event("message_stop", {
             "type": "message_stop"
         })
+        try:
+            usage_tracker.record_event(
+                model=model,
+                endpoint="messages",
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                total_tokens=input_tokens + output_tokens,
+                credits_used=upstream_usage_data,
+                session_id=conversation_id or "",
+            )
+        except sqlite3.Error as error:
+            logger.error(f"Failed to persist Anthropic usage event: {error}")
         
         # Save truncation info for recovery (tracked by stable identifiers)
         from kiro.truncation_recovery import should_inject_recovery

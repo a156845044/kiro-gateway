@@ -86,6 +86,7 @@ from kiro.model_resolver import ModelResolver
 from kiro.account_manager import AccountManager
 from kiro.routes_openai import router as openai_router
 from kiro.routes_anthropic import router as anthropic_router
+from kiro.routes_usage import router as usage_router
 from kiro.exceptions import validation_exception_handler
 from kiro.debug_middleware import DebugLoggerMiddleware
 
@@ -571,6 +572,9 @@ app.include_router(openai_router)
 # Anthropic-compatible API: /v1/messages
 app.include_router(anthropic_router)
 
+# Usage tracking API and embedded dashboard
+app.include_router(usage_router)
+
 
 # --- Uvicorn log config ---
 # Minimal configuration for redirecting uvicorn logs to loguru.
@@ -708,8 +712,9 @@ def print_startup_banner(host: str, port: int) -> None:
     RESET = "\033[0m"
     
     # Determine display URL
-    display_host = "localhost" if host == "0.0.0.0" else host
+    display_host = "127.0.0.1" if host == "0.0.0.0" else host
     url = f"http://{display_host}:{port}"
+    usage_viewer_url = f"{url}/usage-viewer?endpoint={url}/token-usage"
     
     print()
     print(f"  {WHITE}{BOLD}👻 {APP_TITLE} v{APP_VERSION}{RESET}")
@@ -719,6 +724,7 @@ def print_startup_banner(host: str, port: int) -> None:
     print()
     print(f"  {DIM}API Docs:      {url}/docs{RESET}")
     print(f"  {DIM}Health Check:  {url}/health{RESET}")
+    print(f"  {DIM}Usage Viewer:  {usage_viewer_url}{RESET}")
     print()
     print(f"  {DIM}{'─' * 48}{RESET}")
     print(f"  {WHITE}💬 Found a bug? Need help? Have questions?{RESET}")
