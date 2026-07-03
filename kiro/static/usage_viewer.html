@@ -104,7 +104,7 @@
   </div>
 
   <!-- ── Credits quota card (auto-fetched from Kiro API) ── -->
-  <div id="creditsPanel" class="mb-6 hidden rounded-2xl border border-slate-800 bg-slate-900/80 p-5">
+  <div id="creditsPanel" class="mb-6 rounded-2xl border border-slate-800 bg-slate-900/80 p-5">
     <div class="mb-2 flex items-center justify-between">
       <div class="flex items-center gap-2.5">
         <span id="creditsDot" class="inline-block h-3 w-3 rounded-full bg-emerald-500"></span>
@@ -374,14 +374,48 @@ async function loadQuota() {
   // currentEndpoint is like "http://host/token-usage"
   // quota lives at "http://host/token-usage/quota"
   const quotaUrl = currentEndpoint.replace(/\/$/, '') + '/quota';
-  const panel = document.getElementById('creditsPanel');
   try {
     const q = await fetchJSON(quotaUrl);
     renderQuotaPanel(q);
   } catch (err) {
     console.warn('Quota fetch failed:', err.message);
-    panel.classList.add('hidden');
+    renderQuotaPanel(null);
   }
+}
+
+function renderQuotaPanel(q) {
+  // Panel is always visible. On failure or missing data, show placeholders.
+  if (!q || !q.limit) {
+    document.getElementById('creditsTitle').textContent     = 'Kiro Credits';
+    document.getElementById('creditsUsedLbl').textContent   = '—';
+    document.getElementById('creditsBudgetLbl').textContent = '—';
+    document.getElementById('creditsRemLbl').textContent    = '—';
+    document.getElementById('creditsPct').textContent       = 'N/A';
+    const bar = document.getElementById('creditsBar');
+    const dot = document.getElementById('creditsDot');
+    bar.style.width = '0%';
+    bar.style.background = '#475569';
+    dot.style.background = '#475569';
+    return;
+  }
+
+  const used      = q.used  || 0;
+  const limit     = q.limit || 0;
+  const remaining = q.remaining ?? Math.max(0, limit - used);
+  const pct       = limit > 0 ? Math.min(100, (used / limit) * 100) : 0;
+  const color     = pct > 90 ? '#ef4444' : pct > 70 ? '#f59e0b' : '#22c55e';
+
+  document.getElementById('creditsTitle').textContent = q.subscription_title || 'Kiro Credits';
+  document.getElementById('creditsUsedLbl').textContent   = fmt2(used);
+  document.getElementById('creditsBudgetLbl').textContent = fmt2(limit);
+  document.getElementById('creditsRemLbl').textContent    = fmt2(remaining);
+  document.getElementById('creditsPct').textContent       = pct.toFixed(1) + '% used';
+
+  const bar = document.getElementById('creditsBar');
+  const dot = document.getElementById('creditsDot');
+  bar.style.width      = pct + '%';
+  bar.style.background = color;
+  dot.style.background = color;
 }
 
 // ── Models (from gateway cache) ───────────────────────────────────────────
@@ -651,6 +685,11 @@ function renderEvents(data) {
 
 // ── Utilities ─────────────────────────────────────────────────────────────
 function fmt(n) { return Number.isFinite(n) ? Number(n).toLocaleString() : '—'; }
+function fmt2(n) {
+  if (!Number.isFinite(n)) return '—';
+  // Show up to 2 decimals, with thousands separators, trimming trailing zeros
+  return Number(n).toLocaleString(undefined, { maximumFractionDigits: 2 });
+}
 function fmtShort(n) {
   if (!Number.isFinite(n)) return '0';
   if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B';
