@@ -33,7 +33,7 @@
 
   <!-- ── Controls ───────────────────────────────────────────────────── -->
   <form id="controlsForm" class="mb-6 rounded-2xl border border-slate-800 bg-slate-900/80 p-4 shadow-xl">
-    <div class="grid gap-3 lg:grid-cols-[1fr_160px_160px_110px]">
+    <div class="grid gap-3 lg:grid-cols-[1fr_160px_110px]">
       <label class="block">
         <span class="mb-1.5 block text-xs font-medium text-slate-400">Endpoint</span>
         <input id="endpointInput" type="url"
@@ -48,12 +48,6 @@
           <option value="week">Last 7 days</option>
           <option value="month">Last 30 days</option>
         </select>
-      </label>
-      <label class="block">
-        <span class="mb-1.5 block text-xs font-medium text-slate-400">Credit budget</span>
-        <input id="budgetInput" type="number" min="0" step="0.01"
-          class="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-slate-100 outline-none transition focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500/40"
-          placeholder="e.g. 50">
       </label>
       <div class="flex items-end">
         <button type="submit"
@@ -109,12 +103,12 @@
     </div>
   </div>
 
-  <!-- ── Credits quota card (styled like copilot-api Premium Interactions) ── -->
+  <!-- ── Credits quota card (auto-fetched from Kiro API) ── -->
   <div id="creditsPanel" class="mb-6 hidden rounded-2xl border border-slate-800 bg-slate-900/80 p-5">
     <div class="mb-2 flex items-center justify-between">
       <div class="flex items-center gap-2.5">
         <span id="creditsDot" class="inline-block h-3 w-3 rounded-full bg-emerald-500"></span>
-        <span class="text-sm font-bold text-slate-100">Kiro Credits</span>
+        <span id="creditsTitle" class="text-sm font-bold text-slate-100">Kiro Credits</span>
       </div>
       <span id="creditsPct" class="text-sm font-medium text-slate-400"></span>
     </div>
@@ -254,7 +248,6 @@
 
 <script>
 // ── Constants ───────────────────────────────────────────────────────────
-const BUDGET_KEY   = 'kiro-gw.credit-budget';
 const ENDPOINT_KEY = 'kiro-gw.endpoint';
 const PAGE_SIZE    = 20;
 
@@ -273,7 +266,6 @@ let _summaryData = null;
 const form          = document.getElementById('controlsForm');
 const endpointInput = document.getElementById('endpointInput');
 const periodSelect  = document.getElementById('periodSelect');
-const budgetInput   = document.getElementById('budgetInput');
 const statusBadge   = document.getElementById('statusBadge');
 const prevBtn       = document.getElementById('prevPage');
 const nextBtn       = document.getElementById('nextPage');
@@ -289,9 +281,6 @@ const chartTooltip  = document.getElementById('chartTooltip');
 window.addEventListener('DOMContentLoaded', () => {
   lucide.createIcons();
 
-  const saved = localStorage.getItem(BUDGET_KEY);
-  if (saved) budgetInput.value = saved;
-
   const params    = new URLSearchParams(window.location.search);
   const qEndpoint = params.get('endpoint');
   const qPeriod   = params.get('period');
@@ -305,12 +294,6 @@ window.addEventListener('DOMContentLoaded', () => {
 form.addEventListener('submit', e => { e.preventDefault(); currentPage = 1; loadAll(); });
 prevBtn.addEventListener('click', () => { if (currentPage > 1) { currentPage--; loadEvents(); } });
 nextBtn.addEventListener('click', () => { if (currentPage < totalPages) { currentPage++; loadEvents(); } });
-
-budgetInput.addEventListener('change', () => {
-  const v = parseFloat(budgetInput.value);
-  if (v > 0) localStorage.setItem(BUDGET_KEY, v); else localStorage.removeItem(BUDGET_KEY);
-  updateCreditsPanel();
-});
 
 filterModel.addEventListener('change', () => renderChart(_dailyData));
 [showTotal, showInput, showOutput].forEach(cb => cb.addEventListener('change', () => renderChart(_dailyData)));
@@ -333,7 +316,7 @@ async function loadAll() {
 
   document.getElementById('btnLabel').textContent = 'Loading…';
   setStatus('Loading…', null);
-  await Promise.all([loadSummary(), loadDaily(), loadEvents()]);
+  await Promise.all([loadSummary(), loadDaily(), loadEvents(), loadQuota()]);
   document.getElementById('btnLabel').textContent = 'Refresh';
 }
 
@@ -394,8 +377,6 @@ function renderSummary(data) {
   document.getElementById('cardTotal').textContent    = fmt(t.total_tokens);
   const cr = t.credits_used ?? 0;
   document.getElementById('cardCredits').textContent  = cr ? cr.toFixed(4) : '0';
-  _lastCreditsUsed = cr;
-  updateCreditsPanel();
 
   const rows = data?.byModel || [];
   const mc = document.getElementById('modelCount');
@@ -420,27 +401,45 @@ function renderSummary(data) {
   }).join('');
 }
 
-// ── Credits panel ────────────────────────────────────────────────────────
-function updateCreditsPanel() {
-  const budget = parseFloat(budgetInput.value) || 0;
-  const used   = _lastCreditsUsed || 0;
-  const panel  = document.getElementById('creditsPanel');
+// ── Quota (from Kiro API) ─────────────────────────────────────────────────
+async function loadQuota() {
+  const quotaUrl = currentEndpoint.replace(/\/token-usage.*$/, '') + '/token-usage/quota';
+  const panel = document.getElementById('creditsPanel');
+  try {
+    const q = await fetchJSON(quotaUrl);
+    renderQuotaPanel(q);
+  } catch (err) {
+    // Quota fetch failed silently — just hide the panel
+    panel.classList.add('hidden');
+  }
+}
 
-  document.getElementById('creditsUsedLbl').textContent   = used.toFixed(4);
-  document.getElementById('creditsBudgetLbl').textContent = budget > 0 ? budget.toLocaleString() : '—';
-  document.getElementById('creditsRemLbl').textContent    = budget > 0 ? Math.max(0, budget - used).toFixed(4) : '—';
+function renderQuotaPanel(q) {
+  const panel = document.getElementById('creditsPanel');
+  if (!q || !q.limit) { panel.classList.add('hidden'); return; }
 
-  if (budget <= 0) { panel.classList.add('hidden'); return; }
   panel.classList.remove('hidden');
 
-  const pct    = Math.min(100, (used / budget) * 100);
-  const color  = pct > 90 ? '#ef4444' : pct > 70 ? '#f59e0b' : '#22c55e';
-  const bar    = document.getElementById('creditsBar');
-  const dot    = document.getElementById('creditsDot');
+  const used      = q.used  || 0;
+  const limit     = q.limit || 0;
+  const remaining = q.remaining ?? Math.max(0, limit - used);
+  const pct       = limit > 0 ? Math.min(100, (used / limit) * 100) : 0;
+  const color     = pct > 90 ? '#ef4444' : pct > 70 ? '#f59e0b' : '#22c55e';
+
+  // Title from subscription info
+  const title = q.subscription_title || 'Kiro Credits';
+  document.getElementById('creditsTitle').textContent = title;
+
+  document.getElementById('creditsUsedLbl').textContent   = fmt(used);
+  document.getElementById('creditsBudgetLbl').textContent = fmt(limit);
+  document.getElementById('creditsRemLbl').textContent    = fmt(remaining);
+  document.getElementById('creditsPct').textContent       = pct.toFixed(1) + '% used';
+
+  const bar = document.getElementById('creditsBar');
+  const dot = document.getElementById('creditsDot');
   bar.style.width      = pct + '%';
   bar.style.background = color;
   dot.style.background = color;
-  document.getElementById('creditsPct').textContent = pct.toFixed(1) + '% used';
 }
 
 // ── Model filter ─────────────────────────────────────────────────────────
