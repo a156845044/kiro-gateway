@@ -487,14 +487,23 @@ function renderModels(data) {
   const countEl = document.getElementById('modelsCount');
   if (!el) return;
   const models = data?.models || [];
+  const defaultId = data?.default_model;
   if (countEl) countEl.textContent = models.length ? `${models.length} models` : '';
   if (!models.length) {
     el.innerHTML = '<span class="text-slate-500 text-xs">No models available</span>';
     return;
   }
-  el.innerHTML = models.map(m =>
-    `<span class="inline-flex items-center rounded-lg border border-slate-700 bg-slate-800/60 px-2.5 py-1 text-xs font-mono text-slate-300">${esc(m.id)}</span>`
-  ).join('');
+  el.innerHTML = models.map(m => {
+    const isDefault = m.id === defaultId;
+    const border = isDefault ? 'border-cyan-500/60 bg-cyan-500/10' : 'border-slate-700 bg-slate-800/60';
+    const badge = isDefault
+      ? '<span class="ml-1.5 rounded bg-cyan-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-cyan-300">default</span>'
+      : '';
+    const name = m.name && m.name !== m.id
+      ? `<span class="ml-1.5 text-slate-500">${esc(m.name)}</span>` : '';
+    return `<span class="inline-flex items-center rounded-lg border ${border} px-2.5 py-1 text-xs">
+      <span class="font-mono text-slate-200">${esc(m.id)}</span>${name}${badge}</span>`;
+  }).join('');
 }
 
 // ── SVG Line Chart ────────────────────────────────────────────────────────
