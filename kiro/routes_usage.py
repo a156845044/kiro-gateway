@@ -120,7 +120,11 @@ async def get_kiro_quota(request: Request) -> Dict[str, Any]:
     region = _m.group(1) if _m else "us-east-1"
     url = f"https://q.{region}.amazonaws.com/getUsageLimits"
     logger.debug(f"[Quota] Calling {url} (region={region})")
+    profile_arn = getattr(auth_manager, 'profile_arn', None)
     params = {"origin": "AI_EDITOR", "resourceType": "AGENTIC_REQUEST"}
+    if profile_arn:
+        params["profileArn"] = profile_arn
+        logger.debug(f"[Quota] Using profileArn: {profile_arn}")
     headers = {
         "Authorization": "Bearer " + token,
         "Accept": "application/json",
