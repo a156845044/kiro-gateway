@@ -20,9 +20,10 @@
 """FastAPI routes for usage tracking and the embedded usage dashboard."""
 
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+import httpx
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from loguru import logger
 
@@ -30,6 +31,126 @@ from kiro.usage_tracker import usage_tracker
 
 
 router = APIRouter(tags=["Usage"])
+
+
+def _usage_viewer_path() -> Path:
+    """
+    Resolve the filesystem path to the embedded usage viewer.
+
+    Returns:
+        Path to the HTML dashboard file
+    """
+    return Path(__file__).resolve().parent / "static" / "usage_viewer.html"
+
+
+def _compute_quota(breakdown: Dict[str, Any]) -> Dict[str, float]:
+    """
+    Aggregate base usage + active bonuses + active free-trial into totals.
+
+    Mirrors the logic from wjsoj/cc-core:kiroapi/credits.go UsageTotal/LimitTotal.
+
+    Args:
+        breakdown: One entry from usageBreakdownList
+
+    Returns:
+        Dict with keys: used, limit, remaining, next_reset_ms
+    """
+    used  = float(breakdown.get("currentUsageWithPrecision") or breakdown.get("currentUsage") or 0)
+    limit = float(breakdown.get("usageLimitWithPrecision")  or breakdown.get("usageLimit")  or 0)
+
+    # Add active free-trial
+    trial = breakdown.get("freeTrialInfo") or {}
+    if trial.get("freeTrialStatus") == "ACTIVE":
+        used  += float(trial.get("currentUsageWithPrecision") or trial.get("currentUsage") or 0)
+        limit += float(trial.get("usageLimitWithPrecision")  or trial.get("usageLimit")  or 0)
+
+    # Add active bonuses
+    for bonus in breakdown.get("bonuses") or []:
+        if bonus.get("status") == "ACTIVE":
+            used  += float(bonus.get("currentUsage") or 0)
+            limit += float(bonus.get("usageLimit")   or 0)
+
+    remaining = max(0.0, limit - used)
+    return {
+        "used":          round(used,  4),
+        "limit":         round(limit, 4),
+        "remaining":     round(remaining, 4),
+        "next_reset_ms": breakdown.get("nextDateReset"),
+    }
+
+
+@router.get("/token-usage/quota")
+async def get_kiro_quota(request: Request) -> Dict[str, Any]:
+    """
+    Fetch live subscription quota from the Kiro API.
+
+    Calls GET https://q.{region}.amazonaws.com/getUsageLimits and returns
+    computed totals for Premium Interactions (AGENTIC_REQUEST resource type).
+
+    Returns:
+        Quota dict: used, limit, remaining, next_reset_ms, subscription_title
+    """
+    # Retrieve auth manager via account_manager from app state
+    account_manager = getattr(request.app.state, "account_manager", None)
+    if account_manager is None:
+        raise HTTPException(status_code=503, detail="Account manager not available")
+
+    # Pick the first available account's auth manager
+    auth_manager = None
+    for account_id, account in account_manager._accounts.items():
+        auth_manager = account.auth_manager
+        if auth_manager is not None:
+            break
+
+    if auth_manager is None:
+        raise HTTPException(status_code=503, detail="No auth manager available")
+
+    try:
+        token = await auth_manager.get_valid_token()
+    except Exception as exc:
+        logger.error(f"[Quota] Failed to get auth token: {exc}")
+        raise HTTPException(status_code=503, detail=f"Auth error: {exc}") from exc
+
+    # Build endpoint from auth manager's q_host
+    q_host = getattr(auth_manager, "q_host", None) or "https://q.us-east-1.amazonaws.com"
+    url = f"{q_host}/getUsageLimits"
+    params = {"origin": "AI_EDITOR", "resourceType": "AGENTIC_REQUEST"}
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(url, params=params, headers=headers)
+    except httpx.RequestError as exc:
+        logger.error(f"[Quota] Request failed: {exc}")
+        raise HTTPException(status_code=502, detail=f"Kiro API unreachable: {exc}") from exc
+
+    if resp.status_code != 200:
+        logger.warning(f"[Quota] Kiro returned {resp.status_code}: {resp.text[:200]}")
+        raise HTTPException(status_code=resp.status_code, detail=resp.text[:500])
+
+    body = resp.json()
+    logger.debug(f"[Quota] Raw response keys: {list(body.keys())}")
+
+    breakdowns = body.get("usageBreakdownList") or []
+    # Pick AGENTIC_REQUEST entry; fall back to first entry if not filtered server-side
+    primary = next(
+        (b for b in breakdowns if b.get("resourceType") == "AGENTIC_REQUEST"),
+        breakdowns[0] if breakdowns else {}
+    )
+
+    quota = _compute_quota(primary)
+    quota["subscription_title"] = (
+        (body.get("subscriptionInfo") or {}).get("subscriptionTitle") or "Unknown"
+    )
+    quota["subscription_type"] = (
+        (body.get("subscriptionInfo") or {}).get("subscriptionType") or ""
+    )
+    quota["unit"] = primary.get("unit", "REQUEST")
+    return quota
 
 
 def _usage_viewer_path() -> Path:
