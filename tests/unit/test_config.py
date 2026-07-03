@@ -208,8 +208,9 @@ class TestTimeoutConfigurationWarning:
     
     def test_warning_when_first_token_equals_streaming(self, capsys):
         """
-        What it does: Verifies that warning is shown when timeouts are equal.
-        Purpose: Ensure that warning when FIRST_TOKEN_TIMEOUT == STREAMING_READ_TIMEOUT.
+        What it does: Verifies that NO warning is shown when timeouts are equal.
+        Purpose: FIRST_TOKEN_TIMEOUT == STREAMING_READ_TIMEOUT is the recommended
+                 default since heartbeat support was added — it should not warn.
         """
         print("Setup: FIRST_TOKEN_TIMEOUT=300, STREAMING_READ_TIMEOUT=300...")
         
@@ -225,10 +226,12 @@ class TestTimeoutConfigurationWarning:
             config_module._warn_timeout_configuration()
             
             captured = capsys.readouterr()
-            print(f"Captured stderr: {captured.err}")
+            print(f"Captured stderr: '{captured.err}'")
             
-            # Warning SHOULD be shown
-            assert "WARNING" in captured.err or "Suboptimal timeout configuration" in captured.err
+            # Equal values are the recommended default — NO warning should appear
+            assert "WARNING" not in captured.err
+            assert "Suboptimal" not in captured.err
+            print("✓ No warning for equal timeouts (expected — this is the recommended config)")
     
     def test_warning_when_first_token_greater_than_streaming(self, capsys):
         """
@@ -259,8 +262,10 @@ class TestTimeoutConfigurationWarning:
     
     def test_warning_contains_recommendation(self, capsys):
         """
-        What it does: Verifies that warning contains a recommendation.
-        Purpose: Ensure that user receives useful information.
+        What it does: Verifies that warning contains a recommendation when
+                      FIRST_TOKEN_TIMEOUT > STREAMING_READ_TIMEOUT.
+        Purpose: Ensure that user receives useful information in the one case
+                 where the configuration is genuinely problematic.
         """
         print("Setup: FIRST_TOKEN_TIMEOUT=400, STREAMING_READ_TIMEOUT=300...")
         
@@ -279,7 +284,8 @@ class TestTimeoutConfigurationWarning:
             print(f"Captured stderr: {captured.err}")
             
             # Warning should contain recommendation
-            assert "Recommendation" in captured.err or "LESS than" in captured.err
+            assert "WARNING" in captured.err
+            assert "Recommended" in captured.err or "FIRST_TOKEN_TIMEOUT" in captured.err
 
 
 class TestAwsSsoOidcUrlConfig:

@@ -347,23 +347,30 @@ LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
 # First Token Timeout Settings (Streaming Retry)
 # ==================================================================================================
 
-# Timeout for waiting for the first token from the model (in seconds).
-# If the model doesn't respond within this time, the request will be cancelled and retried.
-# This helps handle "stuck" requests when the model takes too long to think.
-# Default: 30 seconds (recommended for production)
-# Set a lower value (e.g., 10-15) for more aggressive retry.
-FIRST_TOKEN_TIMEOUT: float = float(os.getenv("FIRST_TOKEN_TIMEOUT", "15"))
-
 # Read timeout for streaming responses (in seconds).
-# This is the maximum time to wait for data between chunks during streaming.
-# Should be longer than FIRST_TOKEN_TIMEOUT since the model may pause between chunks
-# while "thinking" (especially for tool calls or complex reasoning).
-# Default: 300 seconds (5 minutes) - generous timeout to avoid premature disconnects.
+# This is the maximum time to wait for data between chunks during streaming (httpx-level).
+# Default: 300 seconds (5 minutes).
 STREAMING_READ_TIMEOUT: float = float(os.getenv("STREAMING_READ_TIMEOUT", "300"))
 
-# Maximum number of attempts on first token timeout.
-# After exhausting all attempts, an error will be returned.
-# Default: 3 attempts
+# Timeout for waiting for the first token from the model (in seconds).
+#
+# Before heartbeat support was added, this had to be kept short (15-30s) because
+# clients (Claude Code, Cursor, etc.) would disconnect on idle connections.
+# Now that heartbeats keep clients alive indefinitely, this can safely be set
+# equal to STREAMING_READ_TIMEOUT — effectively unifying both timeouts into one.
+#
+# Default: matches STREAMING_READ_TIMEOUT (300s) — Kiro is assumed to be working
+# as long as the TCP connection is open; the network layer handles true failures.
+# Set lower (e.g., 30) only if you want aggressive retry on slow responses.
+FIRST_TOKEN_TIMEOUT: float = float(os.getenv("FIRST_TOKEN_TIMEOUT", str(STREAMING_READ_TIMEOUT)))
+
+# Maximum number of retry attempts when first token timeout occurs.
+# With FIRST_TOKEN_TIMEOUT=300s, a retry would only happen if Kiro is truly
+# unresponsive for 5 minutes — in that case httpx STREAMING_READ_TIMEOUT fires
+# first anyway, so this value rarely matters for the streaming retry path.
+# Note: this value is also used by http_client for network-level retries
+# (429, 5xx, connection errors) on streaming requests.
+# Default: 3
 FIRST_TOKEN_MAX_RETRIES: int = int(os.getenv("FIRST_TOKEN_MAX_RETRIES", "3"))
 
 # Heartbeat interval for SSE streams (in seconds).
@@ -398,30 +405,30 @@ def _warn_timeout_configuration():
     """
     Print warning if timeout configuration is suboptimal.
     Called at application startup.
-    
-    FIRST_TOKEN_TIMEOUT should be less than STREAMING_READ_TIMEOUT:
-    - FIRST_TOKEN_TIMEOUT: time to wait for model to START responding
-    - STREAMING_READ_TIMEOUT: time to wait BETWEEN chunks during streaming
+
+    With heartbeat support, FIRST_TOKEN_TIMEOUT == STREAMING_READ_TIMEOUT is the
+    recommended default (unified timeout, no premature retries). A warning is only
+    printed when FIRST_TOKEN_TIMEOUT *exceeds* STREAMING_READ_TIMEOUT, which would
+    cause the application-layer timeout to never fire before the network layer does.
     """
-    if FIRST_TOKEN_TIMEOUT >= STREAMING_READ_TIMEOUT:
+    if FIRST_TOKEN_TIMEOUT > STREAMING_READ_TIMEOUT:
         import sys
         YELLOW = "\033[93m"
         RESET = "\033[0m"
-        
         warning_text = f"""
 {YELLOW}⚠️  WARNING: Suboptimal timeout configuration detected.
-    
-    FIRST_TOKEN_TIMEOUT ({FIRST_TOKEN_TIMEOUT}s) >= STREAMING_READ_TIMEOUT ({STREAMING_READ_TIMEOUT}s)
-    
-    These timeouts serve different purposes:
-      - FIRST_TOKEN_TIMEOUT: time to wait for model to START responding (default: 15s)
-      - STREAMING_READ_TIMEOUT: time to wait BETWEEN chunks during streaming (default: 300s)
-    
-    Recommendation: FIRST_TOKEN_TIMEOUT should be LESS than STREAMING_READ_TIMEOUT.
-    
-    Example configuration:
-      FIRST_TOKEN_TIMEOUT=15
-      STREAMING_READ_TIMEOUT=300{RESET}
+
+    FIRST_TOKEN_TIMEOUT ({FIRST_TOKEN_TIMEOUT}s) > STREAMING_READ_TIMEOUT ({STREAMING_READ_TIMEOUT}s)
+
+    FIRST_TOKEN_TIMEOUT should be <= STREAMING_READ_TIMEOUT.
+    When FIRST_TOKEN_TIMEOUT > STREAMING_READ_TIMEOUT, the network-layer timeout
+    (httpx ReadTimeout) fires before the application-layer retry logic, making
+    FIRST_TOKEN_MAX_RETRIES ineffective.
+
+    Recommended configuration (heartbeat-aware):
+      FIRST_TOKEN_TIMEOUT=300   # same as STREAMING_READ_TIMEOUT — rely on network layer
+      STREAMING_READ_TIMEOUT=300
+      FIRST_TOKEN_MAX_RETRIES=1{RESET}
 """
         print(warning_text, file=sys.stderr)
 
