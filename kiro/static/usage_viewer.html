@@ -13,6 +13,13 @@
   </style>
 </head>
 <body class="min-h-screen bg-slate-950 text-slate-100 antialiased">
+<!-- Toast notification -->
+<div id="toast" style="position:fixed; top:24px; left:50%; transform:translateX(-50%) translateY(-16px); opacity:0; z-index:50; pointer-events:none; transition:opacity .3s, transform .3s;">
+  <div class="flex items-center gap-2 rounded-xl border border-emerald-400/50 bg-emerald-500/20 px-4 py-2.5 text-sm font-semibold text-emerald-100 shadow-2xl backdrop-blur-md">
+    <i data-lucide="clipboard-check" class="h-4 w-4"></i>
+    <span id="toastMsg">Copied!</span>
+  </div>
+</div>
 <div class="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
 
   <!-- ── Header ─────────────────────────────────────────────────────── -->
@@ -550,6 +557,29 @@ async function copyModelId(chip) {
       lucide.createIcons({ nodes: [chip] });
     }
   }, 1200);
+
+  // Prominent toast notification
+  showToast(`Copied: ${id}`);
+}
+
+// Show a brief toast at the top center of the screen.
+let _toastTimer = null;
+function showToast(message) {
+  const toast = document.getElementById('toast');
+  const msg = document.getElementById('toastMsg');
+  if (!toast || !msg) return;
+  msg.textContent = message;
+  lucide.createIcons({ nodes: [toast] });
+  // Show (inline styles — not Tailwind classes, which the CDN may not generate
+  // for dynamically-added utilities)
+  toast.style.opacity = '1';
+  toast.style.transform = 'translateX(-50%) translateY(0)';
+  // Auto-hide
+  if (_toastTimer) clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => {
+    toast.style.opacity = '0';
+    toast.style.transform = 'translateX(-50%) translateY(-16px)';
+  }, 1800);
 }
 
 // ── SVG Line Chart ────────────────────────────────────────────────────────
