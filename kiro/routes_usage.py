@@ -120,7 +120,19 @@ async def get_kiro_quota(request: Request) -> Dict[str, Any]:
     region = _m.group(1) if _m else "us-east-1"
     url = f"https://q.{region}.amazonaws.com/getUsageLimits"
     logger.debug(f"[Quota] Calling {url} (region={region})")
-    profile_arn = getattr(auth_manager, 'profile_arn', None)
+    # Read profileArn directly from the credentials file to avoid stale/wrong
+    # values that may be cached in auth_manager from account_manager state.
+    profile_arn: Optional[str] = None
+    try:
+        import json as _json
+        _creds_file = getattr(auth_manager, '_creds_file', None)
+        if _creds_file:
+            _creds = _json.load(open(_creds_file, encoding='utf-8'))
+            profile_arn = _creds.get('profileArn') or _creds.get('profile_arn')
+    except Exception as _e:
+        logger.debug(f'[Quota] Could not read profileArn from creds: {_e}')
+    if not profile_arn:
+        profile_arn = getattr(auth_manager, 'profile_arn', None)
     params = {"origin": "AI_EDITOR", "resourceType": "AGENTIC_REQUEST"}
     if profile_arn:
         params["profileArn"] = profile_arn
