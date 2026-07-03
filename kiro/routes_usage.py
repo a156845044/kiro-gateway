@@ -151,6 +151,16 @@ async def get_kiro_quota(request: Request) -> Dict[str, Any]:
         "Accept": "application/json",
         "Content-Type": "application/json",
     }
+    # External IdP (Microsoft SSO) accounts require the TokenType header, otherwise
+    # the server extracts the JWT clientId (a UUID) and fails ARN validation with
+    # "Invalid ARN <uuid>". This mirrors what the Kiro IDE sends for such accounts.
+    try:
+        from kiro.auth import AuthType
+        if getattr(auth_manager, "auth_type", None) == AuthType.EXTERNAL_IDP:
+            headers["TokenType"] = "EXTERNAL_IDP"
+            logger.debug("[Quota] Added TokenType: EXTERNAL_IDP header")
+    except Exception as _e:
+        logger.debug(f"[Quota] Could not determine auth_type: {_e}")
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -167,9 +177,10 @@ async def get_kiro_quota(request: Request) -> Dict[str, Any]:
     logger.debug(f"[Quota] Raw response keys: {list(body.keys())}")
 
     breakdowns = body.get("usageBreakdownList") or []
-    # Pick AGENTIC_REQUEST entry; fall back to first entry if not filtered server-side
+    # The breakdown's resourceType is "CREDIT" (unit=INVOCATIONS) even though the
+    # request asks for AGENTIC_REQUEST. Prefer CREDIT/AGENTIC_REQUEST, else first.
     primary = next(
-        (b for b in breakdowns if b.get("resourceType") == "AGENTIC_REQUEST"),
+        (b for b in breakdowns if b.get("resourceType") in ("CREDIT", "AGENTIC_REQUEST")),
         breakdowns[0] if breakdowns else {}
     )
 
@@ -178,9 +189,11 @@ async def get_kiro_quota(request: Request) -> Dict[str, Any]:
         (body.get("subscriptionInfo") or {}).get("subscriptionTitle") or "Unknown"
     )
     quota["subscription_type"] = (
-        (body.get("subscriptionInfo") or {}).get("subscriptionType") or ""
+        (body.get("subscriptionInfo") or {}).get("type")
+        or (body.get("subscriptionInfo") or {}).get("subscriptionType")
+        or ""
     )
-    quota["unit"] = primary.get("unit", "REQUEST")
+    quota["unit"] = primary.get("displayName") or primary.get("unit", "Credits")
     return quota
 
 
