@@ -271,6 +271,7 @@ async def stream_kiro_to_openai_internal(
             
             elif event.type == "usage" and event.usage:
                 metering_data = event.usage
+                logger.debug(f"[Usage] Kiro meteringEvent raw payload: {event.usage!r}")
             
             elif event.type == "context_usage" and event.context_usage_percentage is not None:
                 context_usage_percentage = event.context_usage_percentage

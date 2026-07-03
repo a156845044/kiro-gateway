@@ -531,6 +531,7 @@ async def stream_kiro_to_anthropic(
             elif event.type == "usage" and event.usage:
                 upstream_usage_data = event.usage
                 upstream_cache_usage.update(_extract_cache_usage_fields(event.usage))
+                logger.debug(f"[Usage] Kiro meteringEvent raw payload: {event.usage!r}")
         
         # Track completion signals for truncation detection
         stream_completed_normally = context_usage_percentage is not None
