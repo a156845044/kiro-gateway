@@ -111,12 +111,18 @@ async def get_kiro_quota(request: Request) -> Dict[str, Any]:
         logger.error(f"[Quota] Failed to get auth token: {exc}")
         raise HTTPException(status_code=503, detail=f"Auth error: {exc}") from exc
 
-    # Build endpoint from auth manager's q_host
-    q_host = getattr(auth_manager, "q_host", None) or "https://q.us-east-1.amazonaws.com"
-    url = f"{q_host}/getUsageLimits"
+    # getUsageLimits lives on q.{region}.amazonaws.com regardless of auth type.
+    # External IdP accounts have q_host = runtime.kiro.dev (only for chat),
+    # so we extract the region from api_host and build the correct URL.
+    import re as _re
+    api_host = getattr(auth_manager, "api_host", "") or ""
+    _m = _re.search(r"(?:runtime|q)\.([^.]+)\.(kiro\.dev|amazonaws\.com)", api_host)
+    region = _m.group(1) if _m else "us-east-1"
+    url = f"https://q.{region}.amazonaws.com/getUsageLimits"
+    logger.debug(f"[Quota] Calling {url} (region={region})")
     params = {"origin": "AI_EDITOR", "resourceType": "AGENTIC_REQUEST"}
     headers = {
-        "Authorization": f"Bearer {token}",
+        "Authorization": "Bearer " + token,
         "Accept": "application/json",
         "Content-Type": "application/json",
     }
