@@ -1,0 +1,1 @@
+﻿这个文件夹放 https://github.com/farion1231/cc-switch/releases
