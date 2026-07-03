@@ -121,6 +121,18 @@
     </div>
   </div>
 
+  <!-- ── Available models ───────────────────────────────────────────── -->
+  <div class="mb-6 rounded-2xl border border-slate-800 bg-slate-900/80 p-5">
+    <div class="mb-3 flex items-center gap-2">
+      <i data-lucide="cpu" class="h-4 w-4 text-violet-400"></i>
+      <span class="text-sm font-semibold">Available Models</span>
+      <span id="modelsCount" class="text-xs text-slate-500"></span>
+    </div>
+    <div id="modelsList" class="flex flex-wrap gap-2">
+      <span class="text-slate-500 text-xs">Click Refresh to load</span>
+    </div>
+  </div>
+
   <!-- ── Line chart ─────────────────────────────────────────────────── -->
   <div class="mb-6 rounded-2xl border border-slate-800 bg-slate-900/80 shadow-xl">
     <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 px-5 py-4">
@@ -316,7 +328,7 @@ async function loadAll() {
 
   document.getElementById('btnLabel').textContent = 'Loading…';
   setStatus('Loading…', null);
-  await Promise.all([loadSummary(), loadDaily(), loadEvents(), loadQuota()]);
+  await Promise.all([loadSummary(), loadDaily(), loadEvents(), loadQuota(), loadModels()]);
   document.getElementById('btnLabel').textContent = 'Refresh';
 }
 
@@ -355,6 +367,32 @@ async function fetchJSON(url) {
   const r = await fetch(url);
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.json();
+}
+
+// ── Quota (live from Kiro API) ────────────────────────────────────────────
+async function loadQuota() {
+  // currentEndpoint is like "http://host/token-usage"
+  // quota lives at "http://host/token-usage/quota"
+  const quotaUrl = currentEndpoint.replace(/\/$/, '') + '/quota';
+  const panel = document.getElementById('creditsPanel');
+  try {
+    const q = await fetchJSON(quotaUrl);
+    renderQuotaPanel(q);
+  } catch (err) {
+    console.warn('Quota fetch failed:', err.message);
+    panel.classList.add('hidden');
+  }
+}
+
+// ── Models (from gateway cache) ───────────────────────────────────────────
+async function loadModels() {
+  const modelsUrl = currentEndpoint.replace(/\/$/, '') + '/models';
+  try {
+    const data = await fetchJSON(modelsUrl);
+    renderModels(data);
+  } catch (_) {
+    renderModels(null);
+  }
 }
 
 // ── Status badge ────────────────────────────────────────────────────────
@@ -401,53 +439,28 @@ function renderSummary(data) {
   }).join('');
 }
 
-// ── Quota (from Kiro API) ─────────────────────────────────────────────────
-async function loadQuota() {
-  const quotaUrl = currentEndpoint.replace(/\/token-usage.*$/, '') + '/token-usage/quota';
-  const panel = document.getElementById('creditsPanel');
-  try {
-    const q = await fetchJSON(quotaUrl);
-    renderQuotaPanel(q);
-  } catch (err) {
-    // Quota fetch failed silently — just hide the panel
-    panel.classList.add('hidden');
-  }
-}
-
-function renderQuotaPanel(q) {
-  const panel = document.getElementById('creditsPanel');
-  if (!q || !q.limit) { panel.classList.add('hidden'); return; }
-
-  panel.classList.remove('hidden');
-
-  const used      = q.used  || 0;
-  const limit     = q.limit || 0;
-  const remaining = q.remaining ?? Math.max(0, limit - used);
-  const pct       = limit > 0 ? Math.min(100, (used / limit) * 100) : 0;
-  const color     = pct > 90 ? '#ef4444' : pct > 70 ? '#f59e0b' : '#22c55e';
-
-  // Title from subscription info
-  const title = q.subscription_title || 'Kiro Credits';
-  document.getElementById('creditsTitle').textContent = title;
-
-  document.getElementById('creditsUsedLbl').textContent   = fmt(used);
-  document.getElementById('creditsBudgetLbl').textContent = fmt(limit);
-  document.getElementById('creditsRemLbl').textContent    = fmt(remaining);
-  document.getElementById('creditsPct').textContent       = pct.toFixed(1) + '% used';
-
-  const bar = document.getElementById('creditsBar');
-  const dot = document.getElementById('creditsDot');
-  bar.style.width      = pct + '%';
-  bar.style.background = color;
-  dot.style.background = color;
-}
-
 // ── Model filter ─────────────────────────────────────────────────────────
 function populateModelFilter(data) {
   const models = [...new Set((data?.byModel || []).map(m => m.model))];
   const current = filterModel.value;
   filterModel.innerHTML = '<option value="">All models</option>' +
     models.map(m => `<option value="${esc(m)}" ${m === current ? 'selected' : ''}>${esc(m)}</option>`).join('');
+}
+
+// ── Models list ───────────────────────────────────────────────────────────
+function renderModels(data) {
+  const el = document.getElementById('modelsList');
+  const countEl = document.getElementById('modelsCount');
+  if (!el) return;
+  const models = data?.models || [];
+  if (countEl) countEl.textContent = models.length ? `${models.length} models` : '';
+  if (!models.length) {
+    el.innerHTML = '<span class="text-slate-500 text-xs">No models available</span>';
+    return;
+  }
+  el.innerHTML = models.map(m =>
+    `<span class="inline-flex items-center rounded-lg border border-slate-700 bg-slate-800/60 px-2.5 py-1 text-xs font-mono text-slate-300">${esc(m.id)}</span>`
+  ).join('');
 }
 
 // ── SVG Line Chart ────────────────────────────────────────────────────────

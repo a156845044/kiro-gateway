@@ -106,7 +106,7 @@ async def get_kiro_quota(request: Request) -> Dict[str, Any]:
         raise HTTPException(status_code=503, detail="No auth manager available")
 
     try:
-        token = await auth_manager.get_valid_token()
+        token = await auth_manager.get_access_token()
     except Exception as exc:
         logger.error(f"[Quota] Failed to get auth token: {exc}")
         raise HTTPException(status_code=503, detail=f"Auth error: {exc}") from exc
@@ -151,6 +151,39 @@ async def get_kiro_quota(request: Request) -> Dict[str, Any]:
     )
     quota["unit"] = primary.get("unit", "REQUEST")
     return quota
+
+
+@router.get("/token-usage/models")
+async def get_available_models(request: Request) -> Dict[str, Any]:
+    """
+    Return the list of models available for the current account.
+
+    Reads from the in-memory model cache populated at startup
+    via ListAvailableModels. Falls back to config HIDDEN_MODELS.
+
+    Returns:
+        Dict with models list
+    """
+    account_manager = getattr(request.app.state, "account_manager", None)
+    if account_manager is None:
+        raise HTTPException(status_code=503, detail="Account manager not available")
+
+    models = []
+    for account_id, account in account_manager._accounts.items():
+        if account.model_cache:
+            cached = account.model_cache.get_all_model_ids()
+            models = [{"id": m, "account": account_id} for m in cached]
+            break
+
+    # Deduplicate by id
+    seen: set = set()
+    unique = []
+    for m in models:
+        if m["id"] not in seen:
+            seen.add(m["id"])
+            unique.append(m)
+
+    return {"models": unique, "count": len(unique)}
 
 
 def _usage_viewer_path() -> Path:
