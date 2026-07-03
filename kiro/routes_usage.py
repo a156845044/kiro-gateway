@@ -120,19 +120,18 @@ async def get_kiro_quota(request: Request) -> Dict[str, Any]:
     region = _m.group(1) if _m else "us-east-1"
     url = f"https://q.{region}.amazonaws.com/getUsageLimits"
     logger.debug(f"[Quota] Calling {url} (region={region})")
-    # Resolve profileArn with priority: creds file → .env PROFILE_ARN → auth_manager cache
-    profile_arn: Optional[str] = None
-    try:
-        import json as _json
-        _creds_file = getattr(auth_manager, '_creds_file', None)
-        if _creds_file:
-            _creds = _json.load(open(_creds_file, encoding='utf-8'))
-            profile_arn = _creds.get('profileArn') or _creds.get('profile_arn')
-    except Exception as _e:
-        logger.debug(f'[Quota] Could not read profileArn from creds: {_e}')
-    if not profile_arn:
-        from kiro.config import PROFILE_ARN
-        profile_arn = PROFILE_ARN or getattr(auth_manager, 'profile_arn', None) or None
+    # profileArn resolution. The .env PROFILE_ARN is the authoritative source
+    # because it is populated by get_profile_arn.py from Kiro IDE logs
+    # (ListAvailableProfilesCommand) — the exact ARN the API accepts.
+    # auth_manager.profile_arn is only a fallback (may hold a stale/clientId
+    # value from the SQLite state table in ACCOUNT_SYSTEM mode).
+    from kiro.config import _get_raw_env_value, PROFILE_ARN
+    profile_arn = (
+        _get_raw_env_value("PROFILE_ARN")   # dynamic read from .env (no restart needed)
+        or PROFILE_ARN                       # startup-cached .env value
+        or auth_manager.profile_arn          # fallback
+        or None
+    )
     params = {"origin": "AI_EDITOR", "resourceType": "AGENTIC_REQUEST"}
     if profile_arn:
         params["profileArn"] = profile_arn
