@@ -381,6 +381,55 @@ class TestModelsEndpoint:
             assert model["owned_by"] == "anthropic"
 
 
+class TestModelsEndpointLiveRefresh:
+    """Tests for the live-refresh behavior added to GET /v1/models."""
+    
+    def test_models_endpoint_triggers_live_refresh(self, test_client, valid_proxy_api_key):
+        """
+        What it does: Verifies GET /v1/models calls AccountManager.refresh_live_models()
+        before computing the response.
+        Purpose: Ensure /v1/models surfaces real-time entitlements (e.g. brand new
+        models like gpt-5.6-sol) the same way the usage-viewer's
+        /token-usage/models endpoint already does, instead of only ever
+        returning the static FALLBACK_MODELS list used for runtime.kiro.dev accounts.
+        """
+        print("Action: GET /v1/models with valid auth, watching refresh_live_models()...")
+        with patch(
+            "kiro.account_manager.AccountManager.refresh_live_models",
+            new_callable=AsyncMock
+        ) as mock_refresh:
+            response = test_client.get(
+                "/v1/models",
+                headers={"Authorization": f"Bearer {valid_proxy_api_key}"}
+            )
+        
+        print(f"Status: {response.status_code}, refresh called: {mock_refresh.called}")
+        assert response.status_code == 200
+        mock_refresh.assert_awaited_once()
+    
+    def test_models_endpoint_still_returns_cache_when_live_refresh_is_a_noop(self, test_client, valid_proxy_api_key):
+        """
+        What it does: Verifies /v1/models still returns a valid model list when
+        refresh_live_models() is a no-op (e.g. live fetch failed for every account).
+        Purpose: Ensure the endpoint degrades gracefully to the existing cache
+        instead of returning an empty or broken response.
+        """
+        print("Action: GET /v1/models with refresh_live_models() as a no-op...")
+        with patch(
+            "kiro.account_manager.AccountManager.refresh_live_models",
+            new_callable=AsyncMock
+        ):
+            response = test_client.get(
+                "/v1/models",
+                headers={"Authorization": f"Bearer {valid_proxy_api_key}"}
+            )
+        
+        print(f"Status: {response.status_code}, body: {response.json()}")
+        assert response.status_code == 200
+        assert isinstance(response.json()["data"], list)
+        assert len(response.json()["data"]) >= 1
+
+
 # =============================================================================
 # Tests for chat completions endpoint (/v1/chat/completions)
 # =============================================================================

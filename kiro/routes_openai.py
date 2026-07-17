@@ -124,8 +124,11 @@ async def get_models(request: Request):
     """
     Return list of available models.
     
-    Models are loaded at startup (blocking) and cached.
-    This endpoint returns the cached list.
+    Attempts a live refresh from Kiro's ListAvailableModels API before
+    reading the cache (see AccountManager.refresh_live_models / model_discovery.py),
+    so newly released models show up without waiting for a real inference
+    call to "discover" them. Falls back to the existing cache (FALLBACK_MODELS
+    for runtime.kiro.dev accounts) if the live call fails.
     
     Args:
         request: FastAPI Request for accessing app.state
@@ -135,13 +138,16 @@ async def get_models(request: Request):
     """
     logger.info("Request to /v1/models")
     
+    account_manager = request.app.state.account_manager
+    await account_manager.refresh_live_models()
+    
     # Get available models based on mode
     if request.app.state.account_system:
         # Account system: collect models from all initialized accounts
-        available_model_ids = request.app.state.account_manager.get_all_available_models()
+        available_model_ids = account_manager.get_all_available_models()
     else:
         # Legacy: use resolver from first account
-        account = request.app.state.account_manager.get_first_account()
+        account = account_manager.get_first_account()
         available_model_ids = account.model_resolver.get_available_models()
     
     # Build OpenAI-compatible model list

@@ -1274,6 +1274,183 @@ class TestAccountManagerGetAllAvailableModels:
         assert all(isinstance(m, str) for m in models)
 
 
+class TestAccountManagerRefreshLiveModels:
+    """
+    Tests for AccountManager.refresh_live_models() method.
+    
+    This method bypasses the FALLBACK_MODELS shortcut used by
+    _initialize_account()/_refresh_account_models() for runtime.kiro.dev
+    accounts, always attempting a live ListAvailableModels call via the
+    legacy q.{region}.amazonaws.com discovery host (kiro/model_discovery.py).
+    Used by /v1/models so newly released models (e.g. gpt-5.6-sol) show up
+    without waiting for a real inference call to "discover" them.
+    """
+    
+    def _manager_with_account(self, tmp_path, account_id="acc1", hidden_models=None):
+        """Build an AccountManager with one manually-injected initialized account."""
+        manager = AccountManager(
+            credentials_file=str(tmp_path / "creds.json"),
+            state_file=str(tmp_path / "state.json")
+        )
+        model_cache = ModelInfoCache()
+        model_resolver = ModelResolver(cache=model_cache, hidden_models=hidden_models or {})
+        account = Account(
+            id=account_id,
+            auth_manager=Mock(),
+            model_cache=model_cache,
+            model_resolver=model_resolver,
+        )
+        manager._accounts[account_id] = account
+        return manager, account
+    
+    @pytest.mark.asyncio
+    async def test_refresh_replaces_cache_with_live_models(self, tmp_path):
+        """
+        What it does: Verifies a successful live fetch replaces the account's
+        stale/fallback model cache with the live model list.
+        Purpose: Ensure /v1/models can surface real-time entitlements (e.g. a
+        brand new model like gpt-5.6-sol) instead of the static FALLBACK_MODELS list.
+        """
+        print("\n=== Test: refresh_live_models replaces cache on success ===")
+        manager, account = self._manager_with_account(tmp_path)
+        await account.model_cache.update([{"modelId": "auto"}])  # stale/fallback state
+        
+        live_body = {
+            "models": [
+                {"modelId": "gpt-5.6-sol", "modelName": "GPT 5.6 Sol"},
+                {"modelId": "claude-sonnet-5", "modelName": "Claude Sonnet 5"},
+            ]
+        }
+        
+        with patch("kiro.account_manager.HIDDEN_MODELS", {}), \
+             patch("kiro.account_manager.fetch_live_models", new=AsyncMock(return_value=live_body)):
+            await manager.refresh_live_models()
+        
+        available = account.model_resolver.get_available_models()
+        print(f"Available models after refresh: {available}")
+        assert "gpt-5.6-sol" in available
+        assert "claude-sonnet-5" in available
+        assert "auto" not in available
+        assert account.models_cached_at > 0
+    
+    @pytest.mark.asyncio
+    async def test_refresh_updates_model_to_accounts_routing(self, tmp_path):
+        """
+        What it does: Verifies newly-discovered models are added to
+        _model_to_accounts so failover routing can find this account immediately.
+        Purpose: Avoid relying solely on "dynamic learning" from a successful
+        chat completion to learn that a new model works on this account.
+        """
+        print("\n=== Test: refresh_live_models updates routing map ===")
+        manager, account = self._manager_with_account(tmp_path)
+        
+        live_body = {"models": [{"modelId": "gpt-5.6-sol"}]}
+        
+        with patch("kiro.account_manager.HIDDEN_MODELS", {}), \
+             patch("kiro.account_manager.fetch_live_models", new=AsyncMock(return_value=live_body)):
+            await manager.refresh_live_models()
+        
+        print(f"Model to accounts map: {manager._model_to_accounts.keys()}")
+        assert "gpt-5.6-sol" in manager._model_to_accounts
+        assert "acc1" in manager._model_to_accounts["gpt-5.6-sol"].accounts
+    
+    @pytest.mark.asyncio
+    async def test_refresh_keeps_existing_cache_on_failure(self, tmp_path):
+        """
+        What it does: Verifies the cache is left untouched when the live fetch fails.
+        Purpose: Ensure a transient discovery-endpoint failure doesn't wipe out a
+        working model list - graceful degradation to the previous state.
+        """
+        print("\n=== Test: refresh_live_models keeps cache on failure ===")
+        manager, account = self._manager_with_account(tmp_path)
+        await account.model_cache.update([{"modelId": "claude-sonnet-4.5"}])
+        
+        with patch("kiro.account_manager.fetch_live_models", new=AsyncMock(return_value=None)):
+            await manager.refresh_live_models()
+        
+        available = account.model_resolver.get_available_models()
+        print(f"Available models after failed refresh: {available}")
+        assert available == ["claude-sonnet-4.5"]
+    
+    @pytest.mark.asyncio
+    async def test_refresh_reapplies_hidden_models_after_cache_replacement(self, tmp_path):
+        """
+        What it does: Verifies HIDDEN_MODELS are re-added after the cache is
+        replaced with live data.
+        Purpose: ModelInfoCache.update() replaces the whole cache dict, so hidden
+        models must be re-applied or they would silently disappear from
+        /v1/models after every live refresh.
+        """
+        print("\n=== Test: refresh_live_models reapplies hidden models ===")
+        manager, account = self._manager_with_account(
+            tmp_path, hidden_models={"claude-3.7-sonnet": "auto"}
+        )
+        
+        live_body = {"models": [{"modelId": "claude-sonnet-4.6"}]}
+        
+        with patch("kiro.account_manager.HIDDEN_MODELS", {"claude-3.7-sonnet": "auto"}), \
+             patch("kiro.account_manager.fetch_live_models", new=AsyncMock(return_value=live_body)):
+            await manager.refresh_live_models()
+        
+        print(f"Cache has hidden model: {account.model_cache.is_valid_model('claude-3.7-sonnet')}")
+        assert account.model_cache.is_valid_model("claude-3.7-sonnet")
+    
+    @pytest.mark.asyncio
+    async def test_refresh_skips_uninitialized_accounts(self, tmp_path):
+        """
+        What it does: Verifies accounts without an auth_manager/model_cache
+        (not yet initialized) are skipped without calling fetch_live_models.
+        Purpose: Avoid crashing on accounts that failed initialization or
+        haven't been lazily initialized yet.
+        """
+        print("\n=== Test: refresh_live_models skips uninitialized accounts ===")
+        manager = AccountManager(
+            credentials_file=str(tmp_path / "creds.json"),
+            state_file=str(tmp_path / "state.json")
+        )
+        manager._accounts["acc1"] = Account(id="acc1")  # no auth_manager/model_cache
+        
+        with patch("kiro.account_manager.fetch_live_models", new=AsyncMock()) as mock_fetch:
+            await manager.refresh_live_models()
+        
+        print(f"fetch_live_models called: {mock_fetch.called}")
+        mock_fetch.assert_not_called()
+    
+    @pytest.mark.asyncio
+    async def test_refresh_handles_multiple_accounts_independently(self, tmp_path):
+        """
+        What it does: Verifies each account's cache is refreshed (or left alone)
+        independently based on its own live fetch outcome.
+        Purpose: One account's discovery-endpoint failure must not affect
+        another account's successful refresh.
+        """
+        print("\n=== Test: refresh_live_models handles multiple accounts ===")
+        manager, account1 = self._manager_with_account(tmp_path, account_id="acc1")
+        model_cache2 = ModelInfoCache()
+        await model_cache2.update([{"modelId": "claude-opus-4.5"}])
+        account2 = Account(
+            id="acc2",
+            auth_manager=Mock(),
+            model_cache=model_cache2,
+            model_resolver=ModelResolver(cache=model_cache2),
+        )
+        manager._accounts["acc2"] = account2
+        
+        async def fake_fetch(auth_manager):
+            if auth_manager is account1.auth_manager:
+                return {"models": [{"modelId": "gpt-5.6-sol"}]}
+            return None  # simulate failure for the second account
+        
+        with patch("kiro.account_manager.HIDDEN_MODELS", {}), \
+             patch("kiro.account_manager.fetch_live_models", new=AsyncMock(side_effect=fake_fetch)):
+            await manager.refresh_live_models()
+        
+        print(f"acc1 models: {account1.model_resolver.get_available_models()}")
+        print(f"acc2 models: {account2.model_resolver.get_available_models()}")
+        assert account1.model_resolver.get_available_models() == ["gpt-5.6-sol"]
+        assert account2.model_resolver.get_available_models() == ["claude-opus-4.5"]
+
+
 class TestFormatDuration:
     """
     Tests for _format_duration() helper function.

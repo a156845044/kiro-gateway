@@ -10,7 +10,7 @@ Tests for:
 - /usage-viewer
 """
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 
 class TestUsageSummaryRoutes:
@@ -139,3 +139,52 @@ class TestUsageViewerRoute:
         assert response.status_code == 200
         assert "text/html" in response.headers["content-type"]
         assert "Token Usage Viewer" in response.text
+
+
+class TestTokenUsageModelsRoute:
+    """Tests for GET /token-usage/models - the "Available Models" panel."""
+
+    def test_returns_live_models_when_discovery_call_succeeds(self, test_client):
+        """
+        What it does: Verifies the endpoint returns the live model catalog
+        (id/name pairs + default_model) when fetch_live_models() succeeds.
+        Purpose: This is the reference behavior /v1/models was made to match -
+        it must reflect real-time entitlements (e.g. gpt-5.6-sol), not the
+        static FALLBACK_MODELS list.
+        """
+        live_body = {
+            "models": [
+                {"modelId": "gpt-5.6-sol", "modelName": "GPT 5.6 Sol"},
+                {"modelId": "claude-sonnet-5", "modelName": "Claude Sonnet 5"},
+            ],
+            "defaultModel": {"modelId": "auto"},
+        }
+
+        with patch("kiro.routes_usage.fetch_live_models", new=AsyncMock(return_value=live_body)):
+            response = test_client.get("/token-usage/models")
+
+        print(f"Response: {response.json()}")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["count"] == 2
+        assert body["default_model"] == "auto"
+        model_ids = {m["id"] for m in body["models"]}
+        assert model_ids == {"gpt-5.6-sol", "claude-sonnet-5"}
+
+    def test_falls_back_to_cache_when_discovery_call_fails(self, test_client):
+        """
+        What it does: Verifies the endpoint falls back to the in-memory model
+        cache when fetch_live_models() returns None.
+        Purpose: Ensure a transient discovery-endpoint failure still returns a
+        usable (if potentially stale) model list instead of an error.
+        """
+        with patch("kiro.routes_usage.fetch_live_models", new=AsyncMock(return_value=None)):
+            response = test_client.get("/token-usage/models")
+
+        print(f"Response: {response.json()}")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["default_model"] is None
+        assert isinstance(body["models"], list)
+        assert body["count"] == len(body["models"])
+

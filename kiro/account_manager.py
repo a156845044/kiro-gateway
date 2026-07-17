@@ -62,6 +62,7 @@ from kiro.config import (
 from kiro.utils import get_kiro_headers
 from kiro.account_errors import ErrorType
 from kiro.http_client import KiroHttpClient
+from kiro.model_discovery import fetch_live_models
 
 
 def _is_runtime_endpoint(auth_manager: KiroAuthManager) -> bool:
@@ -895,3 +896,43 @@ class AccountManager:
             if account.model_resolver:
                 all_models.update(account.model_resolver.get_available_models())
         return sorted(all_models)
+    
+    async def refresh_live_models(self) -> None:
+        """
+        Best-effort refresh of every initialized account's model cache via a
+        live ListAvailableModels call, bypassing the FALLBACK_MODELS shortcut
+        that _initialize_account()/_refresh_account_models() use for
+        runtime.kiro.dev accounts.
+        
+        Unlike the TTL-based refresh, this ALWAYS attempts the live call (the
+        legacy q.{region}.amazonaws.com discovery endpoint stays reachable
+        regardless of which host the account uses for inference — see
+        kiro/model_discovery.py). Used by /v1/models so it reflects real-time
+        entitlements instead of the static fallback list. Silently keeps the
+        existing cache for any account whose live fetch fails.
+        """
+        for account_id, account in self._accounts.items():
+            if not account.auth_manager or not account.model_cache:
+                continue
+            
+            body = await fetch_live_models(account.auth_manager)
+            raw_models = (body or {}).get("models") or []
+            if not raw_models:
+                continue
+            
+            await account.model_cache.update(raw_models)
+            for display_name, internal_id in HIDDEN_MODELS.items():
+                account.model_cache.add_hidden_model(display_name, internal_id)
+            account.models_cached_at = time.time()
+            self._dirty = True
+            
+            # Update model_to_accounts mapping so newly-discovered models
+            # route correctly on the next failover lookup.
+            if account.model_resolver:
+                for model in account.model_resolver.get_available_models():
+                    if model not in self._model_to_accounts:
+                        self._model_to_accounts[model] = ModelAccountList()
+                    if account_id not in self._model_to_accounts[model].accounts:
+                        self._model_to_accounts[model].accounts.append(account_id)
+            
+            logger.debug(f"[ModelDiscovery] Refreshed account {account_id} with {len(raw_models)} live models")
