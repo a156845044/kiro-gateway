@@ -31,3 +31,4 @@ requests/
 .pytest_cache/
 .coverage
 htmlcov/usage.sqlite
+usage.sqlite
