@@ -32,3 +32,4 @@ requests/
 .coverage
 htmlcov/usage.sqlite
 usage.sqlite
+_launcher.py
