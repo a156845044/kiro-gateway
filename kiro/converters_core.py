@@ -43,7 +43,9 @@ from kiro.config import (
     FAKE_REASONING_BUDGET_CAP,
     KIRO_MAX_PAYLOAD_BYTES,
     AUTO_TRIM_PAYLOAD,
+    NATIVE_EFFORT_ENABLED,
 )
+from kiro.effort import build_additional_model_fields
 from kiro.payload_guards import check_payload_size, trim_payload_to_limit
 
 
@@ -62,7 +64,8 @@ class ThinkingConfig:
     Attributes:
         enabled: Whether to inject thinking tags into the request
         budget_tokens: Token budget for thinking (None = use FAKE_REASONING_MAX_TOKENS default)
-    
+        effort: Normalized native effort requested by the client (None = not requested)
+
     Examples:
         >>> # Default configuration (enabled with default budget)
         >>> ThinkingConfig()
@@ -78,6 +81,7 @@ class ThinkingConfig:
     """
     enabled: bool = True
     budget_tokens: Optional[int] = None
+    effort: Optional[str] = None
 
 
 @dataclass
@@ -1583,6 +1587,12 @@ def build_kiro_payload(
     # Add profileArn
     if profile_arn:
         payload["profileArn"] = profile_arn
+
+    # Native effort (only when explicitly requested by the client)
+    if NATIVE_EFFORT_ENABLED:
+        extra_fields = build_additional_model_fields(model_id, thinking_config.effort)
+        if extra_fields:
+            payload["additionalModelRequestFields"] = extra_fields
 
     # Payload size guard — auto-trim if enabled
     if AUTO_TRIM_PAYLOAD:

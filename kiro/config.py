@@ -496,6 +496,20 @@ FAKE_REASONING_INITIAL_BUFFER_SIZE: int = int(os.getenv("FAKE_REASONING_INITIAL_
 
 
 # ==================================================================================================
+# Native Effort Settings
+# ==================================================================================================
+
+# Forward client effort (Anthropic output_config.effort / OpenAI reasoning_effort) to Kiro as the
+# native additionalModelRequestFields.output_config.effort field for supported Claude models.
+# Only sent when the client explicitly requests an effort. Set to false to restore the old behavior
+# (effort affects only the fake reasoning budget).
+#
+# Default: true
+_NATIVE_EFFORT_RAW: str = os.getenv("NATIVE_EFFORT", "").lower()
+NATIVE_EFFORT_ENABLED: bool = _NATIVE_EFFORT_RAW not in ("false", "0", "no", "disabled", "off")
+
+
+# ==================================================================================================
 # Payload Size Guard Settings
 # ==================================================================================================
 

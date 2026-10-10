@@ -34,6 +34,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from loguru import logger
 
 from kiro.config import HIDDEN_MODELS
+from kiro.effort import normalize_effort
 from kiro.model_resolver import get_model_id_for_kiro
 from kiro.models_openai import ChatMessage, ChatCompletionRequest, Tool
 
@@ -383,7 +384,7 @@ def extract_thinking_config_from_openai(request: ChatCompletionRequest) -> Think
         f"max_tokens={max_tokens}, budget={budget}"
     )
     
-    return ThinkingConfig(enabled=True, budget_tokens=budget)
+    return ThinkingConfig(enabled=True, budget_tokens=budget, effort=normalize_effort(request.reasoning_effort))
 
 
 # ==================================================================================================

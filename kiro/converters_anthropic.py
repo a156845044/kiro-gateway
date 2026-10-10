@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 
 from kiro.config import HIDDEN_MODELS
+from kiro.effort import normalize_effort
 from kiro.model_resolver import get_model_id_for_kiro
 from kiro.models_anthropic import (
     AnthropicMessagesRequest,
@@ -401,29 +402,28 @@ def extract_thinking_config_from_anthropic(request: AnthropicMessagesRequest) ->
         >>> extract_thinking_config_from_anthropic(request)
         ThinkingConfig(enabled=True, budget_tokens=8000)
     """
-    if not request.thinking:
-        # No thinking specified → use defaults
-        return ThinkingConfig(enabled=True, budget_tokens=None)
-    
-    if not isinstance(request.thinking, dict):
-        # Invalid format → use defaults
-        return ThinkingConfig(enabled=True, budget_tokens=None)
-    
+    output_config = request.output_config if isinstance(request.output_config, dict) else {}
+    effort = normalize_effort(output_config.get("effort"))
+
+    if not request.thinking or not isinstance(request.thinking, dict):
+        # No (or invalid) thinking specified → use defaults
+        return ThinkingConfig(enabled=True, budget_tokens=None, effort=effort)
+
     thinking_type = request.thinking.get("type")
-    
+
     if thinking_type == "disabled":
         # Explicitly disabled
-        return ThinkingConfig(enabled=False, budget_tokens=None)
-    
+        return ThinkingConfig(enabled=False, budget_tokens=None, effort=effort)
+
     if thinking_type == "enabled":
         # Extract budget_tokens
         budget = request.thinking.get("budget_tokens")
         if budget:
             logger.debug(f"Extracted thinking config from Anthropic: type='enabled', budget={budget}")
-        return ThinkingConfig(enabled=True, budget_tokens=budget)
-    
+        return ThinkingConfig(enabled=True, budget_tokens=budget, effort=effort)
+
     # Unknown type → use defaults
-    return ThinkingConfig(enabled=True, budget_tokens=None)
+    return ThinkingConfig(enabled=True, budget_tokens=None, effort=effort)
 
 
 def anthropic_to_kiro(
